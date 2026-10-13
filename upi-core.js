@@ -342,12 +342,11 @@ function toEsriPolygon(geom) {
       return url;
     }
 
-    // Map Viewer link: opens a web map centred on the parcel (zoom as a level), with a marker
+    // Map Viewer link (same shape as Map Viewer's own Share link): web map centred on the parcel at an exact scale, with a marker
     function buildViewerUrl(def, upi, parcel) {
       var v = parcelView(parcel);
-      var level = Math.max(0, Math.min(23, Math.round(Math.log(591657550.5 / v.scale) / Math.LN2)));
-      return def.portal + "/apps/mapviewer/index.html?webmap=" + def.map.webmap +
-        "&center=" + v.lon.toFixed(7) + "," + v.lat.toFixed(7) + "&level=" + level +
+      return def.portal + "/apps/mapviewer/index.html?configurableview=true&webmap=" + def.map.webmap + "&theme=light" +
+        "&center=" + v.lon.toFixed(7) + "," + v.lat.toFixed(7) + "&scale=" + Math.round(v.scale) +
         "&marker=" + v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ",4326," + enc("UPI " + upi);
     }
 
