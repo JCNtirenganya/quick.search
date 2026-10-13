@@ -85,9 +85,9 @@
       portal: "https://rla.maps.arcgis.com", itemId: "94eccc60da464df1829748cbd6f0bccf", layer: 0,
       labelField: "zoning",   // main line of each result
       subField: "remarks",    // text shown under it
-      map: {                  // app opened by the physical plan link (centres on the parcel; that app's map does not hold this layer yet)
-        type: "exp", url: "https://experience.arcgis.com/experience/e6aaeb1ba66c4d33afedb247204a4da3",
-        widgetId: "", select: false, marker: true
+      map: {                  // where the "physical plan map" button opens
+        type: "viewer", webmap: "04d76651f4a046f7be88c7d072780f19"   // web map in Map Viewer
+        // or the Experience app instead: type: "exp", url: "https://experience.arcgis.com/experience/e6aaeb1ba66c4d33afedb247204a4da3", widgetId: "", select: false, marker: true
       }
     };
     var SITES = [
@@ -342,6 +342,15 @@ function toEsriPolygon(geom) {
       return url;
     }
 
+    // Map Viewer link: opens a web map centred on the parcel (zoom as a level), with a marker
+    function buildViewerUrl(def, upi, parcel) {
+      var v = parcelView(parcel);
+      var level = Math.max(0, Math.min(23, Math.round(Math.log(591657550.5 / v.scale) / Math.LN2)));
+      return def.portal + "/apps/mapviewer/index.html?webmap=" + def.map.webmap +
+        "&center=" + v.lon.toFixed(7) + "," + v.lat.toFixed(7) + "&level=" + level +
+        "&marker=" + v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ",4326," + enc("UPI " + upi);
+    }
+
     async function buildMapUrl(site, upi, parcel, upiField) {
       var url = site.map.type === "wab" ? await buildWabUrl(site, upi, parcel, upiField) : await buildExpUrl(site, upi, parcel, upiField);
       console.info("Map link:", url);
@@ -476,7 +485,7 @@ function toEsriPolygon(geom) {
         };
 
         var physUrl = "";
-        if (physOn(site)) { try { physUrl = await buildExpUrl({ key: "physical", portal: PHYSICAL.portal, map: PHYSICAL.map }, upi, parcel, upiF); } catch (e) { console.warn(e); } }
+        if (physOn(site)) { try { physUrl = PHYSICAL.map.type === "viewer" ? buildViewerUrl(PHYSICAL, upi, parcel) : await buildExpUrl({ key: "physical", portal: PHYSICAL.portal, map: PHYSICAL.map }, upi, parcel, upiF); } catch (e) { console.warn(e); } }
         show("msg", "Checking zoning and physical plans…");
         var both = await Promise.all([
           analyse("plan", { labelField: site.zoneField, subField: site.useField }).catch(oops),
