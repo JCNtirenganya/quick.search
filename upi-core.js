@@ -45,9 +45,12 @@
     .upi-note { margin-top:10px; font-size:12.5px; color:var(--muted); }
   
     .upi-sub, .upi-top span { overflow-wrap:anywhere; }
-    .upi-panel.upi-wide { width:780px; max-width:calc(100vw - 40px); }
-    .upi-cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:20px; align-items:start; }
-    .upi-coltitle { font-size:14px; font-weight:700; margin:0 0 2px; padding-bottom:4px; border-bottom:2px solid var(--accent); color:var(--ink); }
+    .upi-col[hidden] { display:none; }
+    .upi-nav { display:flex; align-items:center; justify-content:space-between; gap:8px; padding-bottom:4px; border-bottom:2px solid var(--accent); }
+    .upi-navtitle { font-size:14px; font-weight:700; margin:0; color:var(--ink); }
+    .upi-arrow { border:0; border-radius:6px; background:transparent; color:var(--accent); font:inherit; font-size:13px; font-weight:600; cursor:pointer; padding:4px 8px; }
+    .upi-arrow:hover { background:#dce9e6; }
+    .upi-arrow:focus-visible { outline:3px solid #0a4f45; outline-offset:2px; }
   `;
   var HTML = '<button type="button" class="upi-close" id="upiClose" aria-label="Close">&times;</button>' +
     '<h2 class="upi-title"><b>Icyo Ubutaka Bwagenewe</b>/Planned Use</h2>' +
@@ -362,19 +365,33 @@ function toEsriPolygon(geom) {
     }
     function render(site, upi, parcelArea, zoning, physical, parcelCount, mapUrl, otherSites, physUrl) {
       var hiddenCount = (zoning.hidden || 0) + ((physical && physical.hidden) || 0);
-      root.classList.add("upi-wide");
+      var hasPhys = physical !== null;   // null = no physical plan layer for this site
+      var ZMAP = "View this parcel on the zoning map", PMAP = "View this parcel on the physical plan map";
       out.innerHTML =
         '<h3 class="upi-h">UPI ' + esc(upi) + '</h3><div class="upi-meta">' + esc(site.name) + " &middot; Parcel area " + fmt(parcelArea) + " m²</div>" +
-        '<div class="upi-cols">' +
-          '<section class="upi-col"><h4 class="upi-coltitle">Zoning</h4>' + colHtml(zoning, "No master plan zone covers this parcel.", "") + "</section>" +
-          '<section class="upi-col"><h4 class="upi-coltitle">Physical plan</h4>' + colHtml(physical, "No physical plan covers this parcel.", "Physical plan data is not set up for this area yet.") +
-            (physUrl ? '<a class="upi-mapbtn" href="' + esc(physUrl) + '" target="' + COMMON.target + '" rel="noopener">Open the physical plan app here</a>' : "") + "</section>" +
-        "</div>" +
-        '<a class="upi-mapbtn" href="' + esc(mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
+        '<section class="upi-col" id="upiViewZ"><div class="upi-nav"><h4 class="upi-navtitle">Zoning</h4>' +
+          (hasPhys ? '<button type="button" class="upi-arrow" data-go="p" aria-controls="upiViewP">Physical plan &rsaquo;</button>' : "") + "</div>" +
+          colHtml(zoning, "No master plan zone covers this parcel.", "") + "</section>" +
+        (hasPhys ? '<section class="upi-col" id="upiViewP" hidden><div class="upi-nav"><button type="button" class="upi-arrow" data-go="z" aria-controls="upiViewZ">&lsaquo; Zoning</button>' +
+          '<h4 class="upi-navtitle">Physical plan</h4></div>' + colHtml(physical, "No physical plan covers this parcel.", "") + "</section>" : "") +
+        '<a class="upi-mapbtn" id="upiMapBtn" href="' + esc(mapUrl) + '" target="' + COMMON.target + '" rel="noopener">' + ZMAP + "</a>" +
         '<div class="upi-note">Areas are calculated from the layer geometries and are indicative.' +
         (parcelCount > 1 ? " " + parcelCount + " parcels share this UPI; the first is shown." : "") +
         (hiddenCount ? " " + hiddenCount + " tiny overlap(s) under " + COMMON.minPercent + "% were ignored." : "") +
         (otherSites.length ? " This UPI also exists in " + esc(otherSites.join(", ")) + "; " + esc(site.name) + " is shown." : "") + "</div>";
+
+      // One map button for both views: it follows whichever panel is showing
+      var btn = out.querySelector("#upiMapBtn"), zv = out.querySelector("#upiViewZ"), pv = out.querySelector("#upiViewP");
+      Array.prototype.forEach.call(out.querySelectorAll(".upi-arrow"), function (a) {
+        a.onclick = function () {
+          var toP = a.getAttribute("data-go") === "p";
+          zv.hidden = toP; pv.hidden = !toP;
+          btn.setAttribute("href", toP ? (physUrl || mapUrl) : mapUrl);
+          btn.textContent = toP ? PMAP : ZMAP;
+          btn.hidden = toP && !physUrl;
+          (toP ? pv : zv).querySelector(".upi-arrow").focus();
+        };
+      });
     }
 
     async function run() {
