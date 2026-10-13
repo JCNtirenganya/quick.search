@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Land use by UPI</title>
+<style>
+  :root { --accent:#0f6b5e; --accent-d:#0a4f45; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:transparent; }
+  .wrap { position:fixed; right:12px; bottom:12px; z-index:11; }
+  #open { width:58px; height:58px; padding:0; border:0; border-radius:50%; cursor:pointer; background:var(--accent); color:#fff;
+    display:flex; align-items:center; justify-content:center; box-shadow:0 6px 18px rgba(15,107,94,.35); }
+  #open:hover { background:var(--accent-d); }
+  #open:focus-visible { outline:3px solid var(--accent-d); outline-offset:2px; }
+  #open svg { width:26px; height:26px; fill:currentColor; }
+  #overlay { position:fixed; inset:0; z-index:10; display:flex; align-items:flex-end; justify-content:flex-end; padding:12px 12px 82px; }
+  #overlay[hidden] { display:none; }
+  /* Full-page mode (?open=1): no launcher, panel open at the top and centred, no close button */
+  .page .wrap { display:none; }
+  .page #overlay { align-items:flex-start; justify-content:center; padding:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button id="open" aria-haspopup="dialog" aria-label="Check land use by UPI" title="Check land use by UPI">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>
+  </button>
+</div>
+<div id="overlay" hidden><div id="mount" role="dialog" aria-modal="true" aria-label="Land use by UPI"></div></div>
+<script src="upi-core.js"></script>
+<script>
+var overlay = document.getElementById("overlay"), openBtn = document.getElementById("open");
+var pageMode = new URLSearchParams(location.search).get("open") === "1";
+var upi = RSDI_UPI.mount(document.getElementById("mount"), { onClose: closeDlg, deferWarm: true });
+function openDlg() { overlay.hidden = false; upi.warm(); upi.focus(); }
+function closeDlg() { overlay.hidden = true; openBtn.focus(); }
+openBtn.onclick = openDlg;
+overlay.addEventListener("mousedown", function (e) { if (e.target === overlay && !pageMode) closeDlg(); });
+document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden && !pageMode) closeDlg(); });
+// When the host page shrinks this frame to just the icon, tuck the panel away
+window.addEventListener("resize", function () { if (!pageMode && window.innerWidth < 200) overlay.hidden = true; });
+if (pageMode) { document.body.classList.add("page"); document.querySelector(".upi-close").style.display = "none"; openDlg(); }
+</script>
+</body>
+</html>
