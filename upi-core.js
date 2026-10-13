@@ -61,6 +61,7 @@
 
   function mount(root, opts) {
     opts = opts || {};
+    console.info("RSDI_UPI build 2026-10-13: physical plan button opens the app with ?upi=<UPI> (the app puts it in its search box)");
     if (!document.getElementById("rsdi-upi-css")) {
       var st = document.createElement("style"); st.id = "rsdi-upi-css"; st.textContent = CSS; document.head.appendChild(st);
     }
@@ -86,12 +87,13 @@
       labelField: "zoning",   // main line of each result
       subField: "remarks",    // text shown under it
       map: {                  // where the "physical plan map" button opens
-        type: "exp", url: "https://experience.arcgis.com/experience/a8a812fff1a94b388f782c7308a3653e",
-        widgetId: "",         // "" = detect the map widget(s) automatically
-        select: true,         // CHANGED: filter the parcel layer inside the experience so the parcel is selected
-        marker: true,         // marker is only drawn if no parcel data source could be found (fallback)
-        parcelTitle: ""       // NEW (optional fallback): exact layer name of the parcels in the physical plan web map, e.g. "Muhanga Parcel"
-        // alternative, Map Viewer: type: "viewer", webmap: "83361399512f417580bd31a1d855be89"
+        // The ArcGIS "experience" is only an Embed widget wrapping this Vercel app, so ArcGIS URL
+        // parameters (#map_1=..., data_s=...) are ignored. Link straight to the app instead.
+        type: "app",
+        url: "https://nla-physical-plans-public.vercel.app",   // app base URL; each site adds its own path (physicalPath)
+        param: "upi"          // query parameter the app reads, e.g. .../muhanga?upi=2/07/02/02/447
+        // old ArcGIS options kept for reference: type: "exp" (url, widgetId, select, marker, parcelTitle) or
+        // type: "viewer" (webmap: "83361399512f417580bd31a1d855be89")
       }
     };
     var SITES = [
@@ -120,6 +122,7 @@
         parcels: { itemId: "ebb24769dfdf4f24b18e0f8bb5569f2f", layer: 0 },
         plan:    { itemId: "a0af647bc8dc43398f39e7e5d5987cda", layer: 0 },
         physical: PHYSICAL,
+        physicalPath: "muhanga",   // page of the physical plan app for this district; leave out if there is none
         upiField: "UPI",
         zoneField: "Zoning",
         useField: "",
@@ -368,6 +371,13 @@
     // Link to the physical plan map. The site's own parcel layer is passed in so the parcel can be matched
     // to the matching layer inside the physical plan web map and selected by UPI.
     async function buildPhysicalUrl(site, upi, parcel, upiField) {
+      if (PHYSICAL.map.type === "app") {
+        if (!site.physicalPath) return "";   // no physical plan page for this site: the button stays hidden
+        var appUrl = PHYSICAL.map.url.replace(/\/$/, "") + "/" + site.physicalPath +
+          "?" + (PHYSICAL.map.param || "upi") + "=" + enc(upi);
+        console.info("Physical plan map link:", appUrl);
+        return appUrl;
+      }
       if (PHYSICAL.map.type === "viewer") return buildViewerUrl(PHYSICAL, upi, parcel);
       var standIn = {
         key: "physical-" + site.key,      // separate cache entries per site
@@ -419,7 +429,7 @@
         a.onclick = function () {
           var toP = a.getAttribute("data-go") === "p";
           zv.hidden = toP; pv.hidden = !toP;
-          btn.setAttribute("href", toP ? (physUrl || mapUrl) : mapUrl);
+          btn.setAttribute("href", toP ? (physUrl || "#") : mapUrl);   // never show the zoning map link under the physical plan label
           btn.textContent = toP ? PMAP : ZMAP;
           btn.hidden = toP && !physUrl;
           (toP ? pv : zv).querySelector(".upi-arrow").focus();
