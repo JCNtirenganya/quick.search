@@ -87,7 +87,10 @@
       subField: "remarks",    // text shown under it
       map: {                  // where the "physical plan map" button opens
         type: "exp", url: "https://experience.arcgis.com/experience/a8a812fff1a94b388f782c7308a3653e",
-        widgetId: "", select: false, marker: true   // widgetId "" = detect the map widget(s) automatically
+        widgetId: "",         // "" = detect the map widget(s) automatically
+        select: true,         // CHANGED: filter the parcel layer inside the experience so the parcel is selected
+        marker: true,         // marker is only drawn if no parcel data source could be found (fallback)
+        parcelTitle: ""       // NEW (optional fallback): exact layer name of the parcels in the physical plan web map, e.g. "Muhanga Parcel"
         // alternative, Map Viewer: type: "viewer", webmap: "83361399512f417580bd31a1d855be89"
       }
     };
@@ -193,7 +196,7 @@
     }
 
     function orientRings(polys) { var out = []; polys.forEach(function (p) { p.forEach(function (ring, i) { var s = 0; for (var k = 0; k < ring.length - 1; k++) s += (ring[k + 1][0] - ring[k][0]) * (ring[k + 1][1] + ring[k][1]); out.push((i === 0) === (s > 0) ? ring : ring.slice().reverse()); }); }); return out; }  // Esri: outer rings clockwise, holes counter-clockwise
-function toEsriPolygon(geom) {
+    function toEsriPolygon(geom) {
       var polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
       return { rings: orientRings(polys), spatialReference: { wkid: 4326 } };
     }
@@ -246,7 +249,7 @@ function toEsriPolygon(geom) {
       return { lon: lon, lat: lat, x: x, y: y, scale: scale };
     }
 
-    /* ---- Experience Builder (Muhanga) ---- */
+    /* ---- Experience Builder (Muhanga + physical plan map) ---- */
     var expCfgCache = {};
     async function getExpConfig(site) {
       if (expCfgCache[site.key]) return expCfgCache[site.key];
@@ -275,16 +278,21 @@ function toEsriPolygon(geom) {
       try {
         var cfg = await getExpConfig(site);
         var ds = cfg && cfg.dataSources && cfg.dataSources[mapDs];
-        if (!ds || !ds.itemId) return [];
+        if (!ds || !ds.itemId) { console.info("Parcel data source: no web map found for", widgetId, mapDs); return []; }
         var wm = webMapCache[ds.itemId] || (webMapCache[ds.itemId] = await getJSON(site.portal + "/sharing/rest/content/items/" + ds.itemId + "/data?f=json"));
         var pl = await getLayer(site, "parcels");
         var norm = function (u) { return String(u || "").toLowerCase().replace(/\/$/, ""); };
-        var hits = [];
+        var wantTitle = String(site.map.parcelTitle || "").trim().toLowerCase();
+        var hits = [], seen = [];
         var walk = function (ls) { (ls || []).forEach(function (l) {
-          if ((l.url && norm(l.url) === norm(pl.url)) || (l.itemId && l.itemId === site.parcels.itemId)) hits.push(l.id);
+          seen.push((l.title || "(no title)") + " [" + l.id + "] " + (l.url || l.itemId || ""));
+          if ((l.url && norm(l.url) === norm(pl.url)) ||
+              (l.itemId && site.parcels.itemId && l.itemId === site.parcels.itemId) ||
+              (wantTitle && l.title && String(l.title).trim().toLowerCase() === wantTitle)) hits.push(l.id);
           walk(l.layers);
         }); };
         walk(wm.operationalLayers);
+        if (!hits.length) console.info("Parcel layer not matched in the web map. Layers found:", seen, "Looking for url:", pl.url, "or title:", wantTitle || "(none)");
         return hits.flatMap(function (id) { return [mapDs + "-" + id, widgetId + "-" + mapDs + "-" + id]; });
       } catch (e) { console.warn("Could not work out the parcel data source ID", e); return []; }
     }
@@ -354,6 +362,22 @@ function toEsriPolygon(geom) {
     async function buildMapUrl(site, upi, parcel, upiField) {
       var url = site.map.type === "wab" ? await buildWabUrl(site, upi, parcel, upiField) : await buildExpUrl(site, upi, parcel, upiField);
       console.info("Map link:", url);
+      return url;
+    }
+
+    // Link to the physical plan map. The site's own parcel layer is passed in so the parcel can be matched
+    // to the matching layer inside the physical plan web map and selected by UPI.
+    async function buildPhysicalUrl(site, upi, parcel, upiField) {
+      if (PHYSICAL.map.type === "viewer") return buildViewerUrl(PHYSICAL, upi, parcel);
+      var standIn = {
+        key: "physical-" + site.key,      // separate cache entries per site
+        name: site.name,
+        portal: PHYSICAL.portal,
+        parcels: site.parcels,            // the site's parcel layer (url or itemId)
+        map: PHYSICAL.map
+      };
+      var url = await buildExpUrl(standIn, upi, parcel, upiField);
+      console.info("Physical plan map link:", url);
       return url;
     }
 
@@ -485,7 +509,7 @@ function toEsriPolygon(geom) {
         };
 
         var physUrl = "";
-        if (physOn(site)) { try { physUrl = PHYSICAL.map.type === "viewer" ? buildViewerUrl(PHYSICAL, upi, parcel) : await buildExpUrl({ key: "physical", portal: PHYSICAL.portal, map: PHYSICAL.map }, upi, parcel, upiF); } catch (e) { console.warn(e); } }
+        if (physOn(site)) { try { physUrl = await buildPhysicalUrl(site, upi, parcel, upiF); } catch (e) { console.warn(e); } }
         show("msg", "Checking zoning and physical plans…");
         var both = await Promise.all([
           analyse("plan", { labelField: site.zoneField, subField: site.useField }).catch(oops),
