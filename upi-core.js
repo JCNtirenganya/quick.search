@@ -43,6 +43,11 @@
       font-weight:600; color:var(--accent) !important; border:2px solid var(--accent); border-radius:6px; }
     .upi-mapbtn:hover { background:var(--accent); color:#fff !important; }
     .upi-note { margin-top:10px; font-size:12.5px; color:var(--muted); }
+  
+    .upi-sub, .upi-top span { overflow-wrap:anywhere; }
+    .upi-panel.upi-wide { width:780px; max-width:calc(100vw - 40px); }
+    .upi-cols { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:20px; align-items:start; }
+    .upi-coltitle { font-size:14px; font-weight:700; margin:0 0 2px; padding-bottom:4px; border-bottom:2px solid var(--accent); color:var(--ink); }
   `;
   var HTML = '<button type="button" class="upi-close" id="upiClose" aria-label="Close">&times;</button>' +
     '<h2 class="upi-title"><b>Icyo Ubutaka Bwagenewe</b>/Planned Use</h2>' +
@@ -62,10 +67,10 @@
     if (opts.modal) closeBtn.setAttribute("data-dismiss", "modal");
     else if (opts.onClose) closeBtn.onclick = opts.onClose;
     else closeBtn.style.display = "none";
-    return init(opts);
+    return init(opts, root);
   }
 
-  function init(opts) {
+  function init(opts, root) {
     /* ============ CONFIGURE THESE ============ */
     var COMMON = {
       minPercent: 0.1,     // pieces smaller than this are treated as topology slivers
@@ -73,6 +78,15 @@
     };
 
     // The UPI prefix decides which site is searched. If a UPI matches no prefix, every site is searched.
+    var PHYSICAL = {   // one national layer, used for every site
+      portal: "https://rla.maps.arcgis.com", itemId: "94eccc60da464df1829748cbd6f0bccf", layer: 0,
+      labelField: "zoning",   // main line of each result
+      subField: "remarks",    // text shown under it
+      map: {                  // app opened by the physical plan link (centres on the parcel; that app's map does not hold this layer yet)
+        type: "exp", url: "https://experience.arcgis.com/experience/e6aaeb1ba66c4d33afedb247204a4da3",
+        widgetId: "", select: false, marker: true
+      }
+    };
     var SITES = [
       {
         key: "kigali", name: "Kigali",
@@ -80,6 +94,7 @@
         portal: "https://masterplan.kigalicity.gov.rw/portal",
         parcels: { url: "https://masterplan.kigalicity.gov.rw/server/rest/services/Hosted/KigaliParcels_withZoning/FeatureServer/0" },
         plan:    { url: "https://masterplan.kigalicity.gov.rw/server/rest/services/Masterplan2020/Zoning_Phases_22Apr2026/FeatureServer/0" },
+        physical: PHYSICAL,
         upiField: "upi",
         zoneField: "new_zoning",
         useField: "",
@@ -97,6 +112,7 @@
         portal: "https://rla.maps.arcgis.com",
         parcels: { itemId: "ebb24769dfdf4f24b18e0f8bb5569f2f", layer: 0 },
         plan:    { itemId: "a0af647bc8dc43398f39e7e5d5987cda", layer: 0 },
+        physical: PHYSICAL,
         upiField: "UPI",
         zoneField: "Zoning",
         useField: "",
@@ -139,7 +155,7 @@
       var def = site[kind];
       var url = def.url;
       if (!url) {
-        var r = await fetch(site.portal + "/sharing/rest/content/items/" + def.itemId + "?f=json");
+        var r = await fetch((def.portal || site.portal) + "/sharing/rest/content/items/" + def.itemId + "?f=json");
         var meta = await r.json();
         if (meta.error || !meta.url) throw new Error("Could not read the " + site.name + " " + kind + " item. Make sure it is shared publicly");
         url = /\/\d+$/.test(meta.url) ? meta.url : meta.url.replace(/\/$/, "") + "/" + (def.layer != null ? def.layer : 0);
@@ -330,17 +346,30 @@ function toEsriPolygon(geom) {
     }
 
     var fmt = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 1 }); };
-    function render(site, upi, parcelArea, visible, parcelCount, hiddenCount, mapUrl, otherSites) {
+    function physOn(s) { return !!(s.physical && (s.physical.url || s.physical.itemId) && s.physical.labelField); }
+    function colHtml(res, noneMsg, offMsg) {
+      if (res === null) return '<div class="upi-msg">' + offMsg + "</div>";
+      if (res.err) return '<div class="upi-err">' + esc(res.err) + "</div>";
+      if (res.none) return '<div class="upi-msg">' + noneMsg + "</div>";
+      return res.rows.map(function (r) {
+        var pct = r.a / res.parcelArea * 100;
+        return '<div class="upi-zone ' + (r.un ? "upi-un" : "") + '">' +
+          '<div class="upi-top"><span>' + esc(r.zone) + "</span><span>" + pct.toFixed(1) + "%</span></div>" +
+          (r.use ? '<div class="upi-sub">' + esc(r.use) + "</div>" : "") +
+          '<div class="upi-sub">' + fmt(r.a) + " m²</div>" +
+          '<div class="upi-bar"><i style="width:' + Math.min(pct, 100) + '%"></i></div></div>';
+      }).join("");
+    }
+    function render(site, upi, parcelArea, zoning, physical, parcelCount, mapUrl, otherSites, physUrl) {
+      var hiddenCount = (zoning.hidden || 0) + ((physical && physical.hidden) || 0);
+      root.classList.add("upi-wide");
       out.innerHTML =
         '<h3 class="upi-h">UPI ' + esc(upi) + '</h3><div class="upi-meta">' + esc(site.name) + " &middot; Parcel area " + fmt(parcelArea) + " m²</div>" +
-        visible.map(function (r) {
-          var pct = r.a / parcelArea * 100;
-          return '<div class="upi-zone ' + (r.un ? "upi-un" : "") + '">' +
-            '<div class="upi-top"><span>' + esc(r.zone) + "</span><span>" + pct.toFixed(1) + "%</span></div>" +
-            (r.use ? '<div class="upi-sub">' + esc(r.use) + "</div>" : "") +
-            '<div class="upi-sub">' + fmt(r.a) + " m²</div>" +
-            '<div class="upi-bar"><i style="width:' + Math.min(pct, 100) + '%"></i></div></div>';
-        }).join("") +
+        '<div class="upi-cols">' +
+          '<section class="upi-col"><h4 class="upi-coltitle">Zoning</h4>' + colHtml(zoning, "No master plan zone covers this parcel.", "") + "</section>" +
+          '<section class="upi-col"><h4 class="upi-coltitle">Physical plan</h4>' + colHtml(physical, "No physical plan covers this parcel.", "Physical plan data is not set up for this area yet.") +
+            (physUrl ? '<a class="upi-mapbtn" href="' + esc(physUrl) + '" target="' + COMMON.target + '" rel="noopener">Open the physical plan app here</a>' : "") + "</section>" +
+        "</div>" +
         '<a class="upi-mapbtn" href="' + esc(mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
         '<div class="upi-note">Areas are calculated from the layer geometries and are indicative.' +
         (parcelCount > 1 ? " " + parcelCount + " parcels share this UPI; the first is shown." : "") +
@@ -377,63 +406,66 @@ function toEsriPolygon(geom) {
         var site = hits[0].site, upiF = hits[0].upiF, p = hits[0].p;
         var otherSites = hits.slice(1).map(function (h) { return h.site.name; });
 
-        var planLayer = await getLayer(site, "plan");
-        var zoneF = pickField(planLayer, site.zoneField, "the " + site.name + " zoning layer");
-        var useF = site.useField ? pickField(planLayer, site.useField, "the " + site.name + " zoning layer") : "";
-        var outFields = [zoneF, useF].filter(Boolean).join(",");
-
-        var parcel = asFeature(p.features[0].geometry);
+        var geom = p.features[0].geometry;
+        var parcel = asFeature(geom);
         var parcelArea = area(parcel);
         if (!parcelArea) return show("err", "This parcel has no usable geometry.");
         var mapUrl = await buildMapUrl(site, upi, parcel, upiF);
 
-        // Fast path: if one zone wholly contains the parcel, the answer is 100%
-        var whole = await query(planLayer.url, {
-          where: "1=1",
-          geometry: JSON.stringify(toEsriPolygon(p.features[0].geometry)),
-          geometryType: "esriGeometryPolygon",
-          inSR: "4326",
-          spatialRel: "esriSpatialRelContains",
-          outFields: outFields,
-          returnGeometry: "false"
-        });
-        if (whole.features.length === 1) {
-          var pr = whole.features[0].properties;
-          return render(site, upi, parcelArea, [{ zone: pr[zoneF] != null ? pr[zoneF] : "Unspecified", use: useF ? (pr[useF] != null ? pr[useF] : "") : "", a: parcelArea }], p.features.length, 0, mapUrl, otherSites);
+        // Overlay the parcel on one plan layer and return its rows with percentages
+        async function analyse(kind, def) {
+          var layer = await getLayer(site, kind), what = "the " + site.name + " " + (kind === "plan" ? "zoning" : "physical plan") + " layer";
+          var labelF = pickField(layer, def.labelField, what);
+          var subF = def.subField ? pickField(layer, def.subField, what) : "";
+          var outFields = [labelF, subF].filter(Boolean).join(",");
+          var whole = await query(layer.url, {
+            where: "1=1", geometry: JSON.stringify(toEsriPolygon(geom)), geometryType: "esriGeometryPolygon", inSR: "4326",
+            spatialRel: "esriSpatialRelContains", outFields: outFields, returnGeometry: "false"
+          });
+          if (whole.features.length === 1) {   // one feature wholly contains the parcel: 100%
+            var pr = whole.features[0].properties;
+            return { parcelArea: parcelArea, hidden: 0, rows: [{ zone: pr[labelF] != null ? pr[labelF] : "Unspecified", use: subF ? (pr[subF] != null ? pr[subF] : "") : "", a: parcelArea }] };
+          }
+          var plan = await fetchAllPlan(geom, layer.url, outFields);
+          if (!plan.length) return { none: true };
+          var groups = new Map(), bb = turf.bbox(parcel);
+          plan.forEach(function (f) {
+            var piece = safe(function () { return turf.intersect(turf.featureCollection([parcel, turf.bboxClip(asFeature(f.geometry), bb)])); });
+            if (!piece) return;
+            var zone = f.properties[labelF] != null ? f.properties[labelF] : "Unspecified";
+            var use = subF ? (f.properties[subF] != null ? f.properties[subF] : "") : "";
+            var key = zone + "|" + use;
+            var g = groups.get(key) || { zone: zone, use: use, geom: null };
+            g.geom = union(g.geom, piece);
+            groups.set(key, g);
+          });
+          var covered = null, rows = [];
+          Array.from(groups.values()).sort(function (a, b) { return area(b.geom) - area(a.geom); }).forEach(function (g) {
+            var own = covered ? safe(function () { return turf.difference(turf.featureCollection([g.geom, covered])); }) : g.geom;
+            var a = area(own);
+            covered = union(covered, g.geom);
+            if (a > 0) rows.push({ zone: g.zone, use: g.use, a: a });
+          });
+          var visible = rows.filter(function (r) { return r.a / parcelArea * 100 >= COMMON.minPercent; });
+          var hidden = rows.length - visible.length;
+          var unzoned = Math.max(parcelArea - Math.min(area(covered), parcelArea), 0);
+          if (unzoned / parcelArea * 100 >= COMMON.minPercent) visible.push({ zone: kind === "plan" ? "Not covered by any zone" : "Not covered by a physical plan", use: "", a: unzoned, un: true });
+          return { parcelArea: parcelArea, hidden: hidden, rows: visible };
         }
+        var oops = function (e) {
+          console.error(e);
+          if (/not found in/.test(e.message)) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("rsdi_lu_v1_") === 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (x) {} }
+          return { err: e instanceof TypeError ? "Could not reach the mapping server (network problem, or the server does not allow this website)" : e.message };
+        };
 
-        show("msg", "Parcel spans several zones. Calculating percentages…");
-        var plan = await fetchAllPlan(p.features[0].geometry, planLayer.url, outFields);
-        if (!plan.length) return show("err", "The parcel was found, but no master plan zone covers it.");
-
-        var groups = new Map();
-        var bb = turf.bbox(parcel);
-        plan.forEach(function (f) {
-          var piece = safe(function () { return turf.intersect(turf.featureCollection([parcel, turf.bboxClip(asFeature(f.geometry), bb)])); });
-          if (!piece) return;
-          var zone = f.properties[zoneF] != null ? f.properties[zoneF] : "Unspecified";
-          var use = useF ? (f.properties[useF] != null ? f.properties[useF] : "") : "";
-          var key = zone + "|" + use;
-          var g = groups.get(key) || { zone: zone, use: use, geom: null };
-          g.geom = union(g.geom, piece);
-          groups.set(key, g);
-        });
-
-        var covered = null;
-        var rows = [];
-        Array.from(groups.values()).sort(function (a, b) { return area(b.geom) - area(a.geom); }).forEach(function (g) {
-          var own = covered ? safe(function () { return turf.difference(turf.featureCollection([g.geom, covered])); }) : g.geom;
-          var a = area(own);
-          covered = union(covered, g.geom);
-          if (a > 0) rows.push({ zone: g.zone, use: g.use, geom: g.geom, a: a });
-        });
-
-        var visible = rows.filter(function (r) { return r.a / parcelArea * 100 >= COMMON.minPercent; });
-        var hiddenCount = rows.length - visible.length;
-        var usedArea = Math.min(area(covered), parcelArea);
-        var unzoned = Math.max(parcelArea - usedArea, 0);
-        if (unzoned / parcelArea * 100 >= COMMON.minPercent) visible.push({ zone: "Not covered by any zone", use: "", a: unzoned, un: true });
-        render(site, upi, parcelArea, visible, p.features.length, hiddenCount, mapUrl, otherSites);
+        var physUrl = "";
+        if (physOn(site)) { try { physUrl = await buildExpUrl({ key: "physical", portal: PHYSICAL.portal, map: PHYSICAL.map }, upi, parcel, upiF); } catch (e) { console.warn(e); } }
+        show("msg", "Checking zoning and physical plans…");
+        var both = await Promise.all([
+          analyse("plan", { labelField: site.zoneField, subField: site.useField }).catch(oops),
+          physOn(site) ? analyse("physical", site.physical).catch(oops) : Promise.resolve(null)
+        ]);
+        render(site, upi, parcelArea, both[0], both[1], p.features.length, mapUrl, otherSites, physUrl);
       } catch (e) {
         console.error(e);
         if (/not found in/.test(e.message)) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("rsdi_lu_v1_") === 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (x) {} } show("err", "Could not complete the search: " + esc(e instanceof TypeError ? "Could not reach the mapping server (network problem, or the server does not allow this website)" : e.message) + ". Check that the layers are shared publicly.");
@@ -449,7 +481,7 @@ function toEsriPolygon(geom) {
     function warm() {
       loadTurf().catch(function () {});
       SITES.forEach(function (s) {
-        getLayer(s, "parcels").catch(function () {}); getLayer(s, "plan").catch(function () {});
+        getLayer(s, "parcels").catch(function () {}); getLayer(s, "plan").catch(function () {}); if (physOn(s)) getLayer(s, "physical").catch(function () {});
         (s.map.type === "exp" ? findMapWidgets(s) : getWabLayerId(s)).catch(function () {});
       });
     }
