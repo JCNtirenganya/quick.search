@@ -1,5 +1,5 @@
 /* Rwanda SDI Hub floating chat loader.
-   Add to the ArcGIS Hub page:  <script src="https://YOUR-USER.github.io/YOUR-REPO/embed.js"></script>
+   Add to the ArcGIS Hub page:  <script src="https://jcntirenganya.github.io/quick.search/embed.js"></script>
    Optional: data-src="https://.../chat-widget.html" if the widget lives somewhere else. */
 (function () {
   if (window.__rsdiChatLoaded) return;
