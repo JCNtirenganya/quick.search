@@ -130,6 +130,7 @@
         type: "exp",
         url: "https://experience.arcgis.com/experience/a8a812fff1a94b388f782c7308a3653e",
         widgetId: "",         // empty = find the map widget(s) automatically
+        parcelTitle: "",      // parcel layer name in that map; empty = "<site name> Parcels" (e.g. "Muhanga Parcels")
         select: true,         // selects the parcel if the experience's map contains the site's parcel layer, else drops a marker
         marker: true,
         dataSourceId: ""
@@ -286,9 +287,10 @@
         var wm = webMapCache[ds.itemId] || (webMapCache[ds.itemId] = await getJSON(site.portal + "/sharing/rest/content/items/" + ds.itemId + "/data?f=json"));
         var pl = await getLayer(site, "parcels");
         var norm = function (u) { return String(u || "").toLowerCase().replace(/\/$/, ""); };
+        var ptitle = String(site.map.parcelTitle || (site.name + " Parcels")).trim().toLowerCase();   // e.g. "Muhanga Parcels"
         var hits = [];
         var walk = function (ls) { (ls || []).forEach(function (l) {
-          if ((l.url && norm(l.url) === norm(pl.url)) || (l.itemId && l.itemId === site.parcels.itemId)) hits.push(l.id);
+          if ((l.url && norm(l.url) === norm(pl.url)) || (l.itemId && l.itemId === site.parcels.itemId) || (l.title && String(l.title).trim().toLowerCase() === ptitle)) hits.push(l.id);
           walk(l.layers);
         }); };
         walk(wm.operationalLayers);
@@ -468,7 +470,7 @@
       var c = ctx; c.tab = kind;
       Array.prototype.forEach.call(tabsEl.children, function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-tab") === kind)); });
       show("msg", kind === "physical" ? "Checking the physical plan…" : "Checking the zoning…");
-      var res = await getResult(c, kind), mapUrl = await getMapUrl(c, kind);
+      var both = await Promise.all([getResult(c, kind), getMapUrl(c, kind)]), res = both[0], mapUrl = both[1];   // the map link never depends on the plan result
       if (ctx === c && c.tab === kind) render(res, mapUrl);
     }
     tabsEl.addEventListener("click", function (e) {
