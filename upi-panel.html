@@ -130,16 +130,14 @@
       portal: "https://rla.maps.arcgis.com",
       zoneField: "zoning",    // main line
       useField: "remarks",    // status, shown under it
+      districts: {            // UPI start (province/district) -> district name used in the link. Add a line for each district you append.
+        "1/01": "Nyarugenge", "1/02": "Gasabo", "1/03": "Kicukiro",
+        "2/07": "Muhanga"
+      },
       map: {                  // opened from the Physical plan tab
-        type: "exp",
-        url: "https://experience.arcgis.com/experience/a8a812fff1a94b388f782c7308a3653e",
-        widgetId: "",         // empty = find the map widget(s) automatically
-        search: true,         // type the UPI into the app's Search widget so it zooms to and highlights the parcel
-        searchWidgetId: "",   // empty = find the Search widget(s) automatically
-        parcelTitle: "",      // parcel layer name in that map; empty = "<site name> Parcels" (e.g. "Muhanga Parcels")
-        select: true,         // selects the parcel if the experience's map contains the site's parcel layer, else drops a marker
-        marker: true,
-        dataSourceId: ""
+        type: "link",
+        url: "https://nla-physical-plans-public.vercel.app/{district}",
+        param: "upi"          // adds ?upi=<UPI> so the page can pre-fill its search box (the page must read it); "" = no parameter
       }
     };
     var PHYS_SITE = { key: "physical", name: "Physical plan", portal: PHYSICAL.portal, physical: PHYSICAL };
@@ -324,14 +322,15 @@
       }
       var sw = site.map.search ? await findSearchWidgets(site) : [];
       var val = "center:" + enc(v.x.toFixed(2) + "," + v.y.toFixed(2) + ",102100") + ",scale:" + v.scale;
-      if (site.map.marker && !sel.length && !sw.length) val += ",marker:" + enc(v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ";;" + upi + ";" + upi);
+      if (site.map.marker && !sel.length && !sw.length && !site.map.upiParam) val += ",marker:" + enc(v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ";;" + upi + ";" + upi);
       var parts = widgets.map(function (w) { return w.id + "=" + val; });
       if (sel.length) {
         var where = enc(upiField + "='" + upi.replace(/'/g, "''") + "'");
         parts.push("data_s=" + sel.map(function (id) { return "where:" + id + ":" + where; }).join(","));
       }
       sw.forEach(function (id) { parts.push(id + "=text:" + enc(upi)); });
-      return base + "#" + parts.join("&");
+      var q = site.map.upiParam ? "?" + site.map.upiParam + "=" + enc(upi) : "";   // e.g. ?upi=2%2F07%2F01%2F01%2F5833
+      return base + q + "#" + parts.join("&");
     }
 
     /* ---- Web AppBuilder (Kigali) ---- */
@@ -478,6 +477,11 @@
     async function getMapUrl(c, kind) {
       var m = kind === "physical" && PHYSICAL.map;
       if (!m || !m.url) return c.mapUrl;
+      if (m.type === "link") {
+        var name = PHYSICAL.districts[c.upi.split("/").slice(0, 2).join("/")] || c.site.name;   // district from the UPI, else the site name
+        var link = m.url.replace("{district}", encodeURIComponent(name));
+        return m.param ? link + (link.indexOf("?") >= 0 ? "&" : "?") + m.param + "=" + encodeURIComponent(c.upi) : link;
+      }
       if (!c.mapJobs[kind]) c.mapJobs[kind] = buildMapUrl(Object.assign({}, c.site, { key: c.site.key + "_physical", portal: PHYSICAL.portal, map: m }), c.upi, c.parcel, c.upiF)
         .catch(function (e) { console.warn(e); return c.mapUrl; });
       return c.mapJobs[kind];
