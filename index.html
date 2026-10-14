@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planned use search | Rwanda SDI Hub</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:24px 16px; background:#e8efed; font:15px/1.5 system-ui, "Segoe UI", sans-serif; color:#1d2b2a; }
+  h1 { font-size:20px; margin:0 0 4px; text-align:center; }
+  p.lead { margin:0 0 18px; color:#5e6f6d; text-align:center; max-width:460px; }
+  #upiPanel { width:100%; max-width:460px; max-height:none; }
+</style>
+</head>
+<body>
+<h1>Planned use search</h1>
+<p class="lead">Enter a UPI to see its zoning, then switch to the physical plan.</p>
+<div id="upiPanel"></div>
+<noscript>This page needs JavaScript.</noscript>
+<script>
+// Loads the same upi-panel.html that the Hub modal uses, so there is only one copy of the code to maintain.
+fetch("upi-panel.html").then(function (r) {
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.text();
+}).then(function (html) {
+  var m = html.match(/<script>([\s\S]*?)<\/script>/);
+  if (!m) throw new Error("no script found");
+  var s = document.createElement("script");
+  s.textContent = m[1];
+  document.body.appendChild(s);
+}).catch(function (e) {
+  document.getElementById("upiPanel").textContent = "Could not load the search (" + e.message + "). Open this page from a web server, not as a local file.";
+});
+</script>
+</body>
+</html>

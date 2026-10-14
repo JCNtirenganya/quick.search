@@ -1,0 +1,541 @@
+/* Rwanda SDI Hub: land use by UPI. Shared by index.html (iframe) and upi-panel.html (Bootstrap modal).
+   Usage: RSDI_UPI.mount(element, { modal: true })  or  { onClose: fn, deferWarm: true }
+   Returns { focus(), warm() }. Edit SITES below to add or change areas. */
+(function () {
+  var TURF = {
+    src: "https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js",
+    integrity: ""   // paste the SRI hash here (see README notes), or self-host turf and change src
+  };
+  var CSS = `
+    .upi-panel { --ink:#1d2b2a; --muted:#5e6f6d; --line:#d5dedc; --accent:#0f6b5e; --accent-d:#0a4f45; --warn:#9a3412;
+      position:relative; width:360px; max-width:calc(100vw - 40px); max-height:calc(100vh - 140px); overflow:auto;
+      padding:16px 16px 14px; text-align:left; font:15px/1.5 system-ui, "Segoe UI", sans-serif; color:var(--ink);
+      background:#f3f7f6; border:1px solid #cfdcd9; border-left:5px solid var(--accent); border-radius:8px;
+      box-shadow:0 12px 40px rgba(0,0,0,.3); }
+    .upi-panel * { box-sizing:border-box; }
+    .upi-title { font-size:15px; font-weight:400; margin:0 0 10px; padding-right:30px; color:var(--ink); }
+    .upi-title b, .upi-panel label b { font-weight:700; }
+    .upi-close { position:absolute; top:6px; right:6px; width:32px; height:32px; border:0; border-radius:6px;
+      background:transparent; color:var(--muted); font-size:22px; line-height:1; cursor:pointer; padding:0; }
+    .upi-close:hover { background:#dce9e6; color:var(--ink); }
+    .upi-panel label { display:block; font-weight:400; font-size:14px; margin:0 0 5px; color:var(--ink); }
+    .upi-row { display:flex; gap:8px; }
+    .upi-input { flex:1; min-width:0; height:auto; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
+      font:inherit; box-shadow:none; background:#fff; color:var(--ink); }
+    .upi-go { border:0; border-radius:6px; background:var(--accent); color:#fff; padding:8px 14px; font:inherit;
+      font-weight:600; cursor:pointer; }
+    .upi-go:hover { background:var(--accent-d); }
+    .upi-go:disabled { opacity:.6; cursor:wait; }
+    .upi-close:focus-visible, .upi-go:focus-visible, .upi-input:focus-visible { outline:3px solid #0a4f45; outline-offset:2px; }
+    .upi-tabs { display:flex; margin-top:12px; border:2px solid var(--accent); border-radius:6px; overflow:hidden; }
+    .upi-tabs[hidden] { display:none; }
+    .upi-tab { flex:1; border:0; background:#fff; color:var(--accent); padding:7px 10px; font:inherit; font-weight:600; cursor:pointer; }
+    .upi-tab + .upi-tab { border-left:2px solid var(--accent); }
+    .upi-tab[aria-selected="true"] { background:var(--accent); color:#fff; }
+    .upi-tab:focus-visible { outline:3px solid #0a4f45; outline-offset:-3px; }
+    .upi-out:empty { display:none; }
+    .upi-out { margin-top:12px; }
+    .upi-msg { color:var(--muted); }
+    .upi-err { color:var(--warn); }
+    .upi-h { font-size:16px; font-weight:700; margin:0 0 2px; color:var(--ink); }
+    .upi-meta { color:var(--muted); font-size:13px; margin-bottom:12px; }
+    .upi-zone { padding:8px 0; border-top:1px solid var(--line); }
+    .upi-top { display:flex; justify-content:space-between; gap:12px; font-weight:600; }
+    .upi-sub { color:var(--muted); font-size:13px; }
+    .upi-bar { height:8px; background:#dfe9e7; border-radius:4px; margin-top:6px; overflow:hidden; }
+    .upi-bar i { display:block; height:100%; background:var(--accent); }
+    .upi-un .upi-bar i { background:#a8b5b3; }
+    .upi-mapbtn { display:block; margin-top:14px; padding:9px 14px; text-align:center; text-decoration:none !important;
+      font-weight:600; color:var(--accent) !important; border:2px solid var(--accent); border-radius:6px; }
+    .upi-mapbtn:hover { background:var(--accent); color:#fff !important; }
+    .upi-note { margin-top:10px; font-size:12.5px; color:var(--muted); }
+  `;
+  var HTML = '<button type="button" class="upi-close" id="upiClose" aria-label="Close">&times;</button>' +
+    '<h2 class="upi-title"><b>Icyo Ubutaka Bwagenewe</b>/Planned Use</h2>' +
+    '<label for="upiInput"><b>Shyiramo UPI</b>/Type the UPI</label>' +
+    '<div class="upi-row"><input class="upi-input" id="upiInput" type="text" placeholder="e.g. 1/02/03/04/0005" autocomplete="off">' +
+    '<button class="upi-go" id="upiGo" type="button">Search</button></div>' +
+    '<div class="upi-tabs" id="upiTabs" role="tablist" hidden>' +
+    '<button type="button" class="upi-tab" role="tab" data-tab="plan" aria-selected="true">Zoning</button>' +
+    '<button type="button" class="upi-tab" role="tab" data-tab="physical" aria-selected="false">Physical plan</button></div>' +
+    '<div class="upi-out" id="upiOut" aria-live="polite"></div>';
+
+  function mount(root, opts) {
+    opts = opts || {};
+    if (!document.getElementById("rsdi-upi-css")) {
+      var st = document.createElement("style"); st.id = "rsdi-upi-css"; st.textContent = CSS; document.head.appendChild(st);
+    }
+    root.className = (root.className ? root.className + " " : "") + "upi-panel";
+    root.innerHTML = HTML;
+    var closeBtn = root.querySelector("#upiClose");
+    if (opts.modal) closeBtn.setAttribute("data-dismiss", "modal");
+    else if (opts.onClose) closeBtn.onclick = opts.onClose;
+    else closeBtn.style.display = "none";
+    return init(opts);
+  }
+
+  function init(opts) {
+    /* ============ CONFIGURE THESE ============ */
+    var COMMON = {
+      minPercent: 0.1,     // pieces smaller than this are treated as topology slivers
+      target: "_blank"     // "View on map": "_blank" = new tab, "_top" = replace the whole page
+    };
+
+    // The UPI prefix decides which site is searched. If a UPI matches no prefix, every site is searched.
+    var SITES = [
+      {
+        key: "kigali", name: "Kigali",
+        upiPrefix: "1/",
+        portal: "https://masterplan.kigalicity.gov.rw/portal",
+        parcels: { url: "https://masterplan.kigalicity.gov.rw/server/rest/services/Hosted/KigaliParcels_withZoning/FeatureServer/0" },
+        plan:    { url: "https://masterplan.kigalicity.gov.rw/server/rest/services/Masterplan2020/Zoning_Phases_22Apr2026/FeatureServer/0" },
+        upiField: "upi",
+        zoneField: "new_zoning",
+        useField: "",
+        // Second tab. Leave url/itemId empty until the layer is ready: the tab then says "not available yet".
+        physical: {
+          url: "",         // direct REST URL ending in /FeatureServer/0 ... or use itemId + layer below
+          itemId: "", layer: 0,
+          zoneField: "",   // field holding the land-use / category name
+          useField: ""     // optional second line (leave "" if none)
+        },
+        map: {
+          type: "wab",
+          url: "https://masterplan.kigalicity.gov.rw/portal/apps/webappviewer/index.html?id=fdd2e30cbc15401d9daee5f68982d755",
+          layerId: "",
+          select: true,
+          marker: true
+        }
+      },
+      {
+        key: "muhanga", name: "Muhanga",
+        upiPrefix: "2/07/",
+        portal: "https://rla.maps.arcgis.com",
+        parcels: { itemId: "ebb24769dfdf4f24b18e0f8bb5569f2f", layer: 0 },
+        plan:    { itemId: "a0af647bc8dc43398f39e7e5d5987cda", layer: 0 },
+        upiField: "UPI",
+        zoneField: "Zoning",
+        useField: "",
+        // Second tab. Leave url/itemId empty until the layer is ready: the tab then says "not available yet".
+        physical: {
+          url: "",         // direct REST URL ending in /FeatureServer/0 ... or use itemId + layer below
+          itemId: "", layer: 0,
+          zoneField: "",   // field holding the land-use / category name
+          useField: ""     // optional second line (leave "" if none)
+        },
+        map: {
+          type: "exp",
+          url: "https://experience.arcgis.com/experience/19333efca3744cf3ab27ba4da073d49f",
+          widgetId: "widget_7",
+          select: true,
+          marker: true,
+          dataSourceId: ""
+        }
+      }
+    ];
+    /* ========================================= */
+
+    var $ = function (id) { return document.getElementById(id); };
+    var input = $("upiInput"), go = $("upiGo"), out = $("upiOut");
+
+    // Turf.js is loaded on demand (the Hub page does not have it)
+    var turfReady = null;
+    function loadTurf() {
+      if (window.turf) return Promise.resolve();
+      if (turfReady) return turfReady;
+      turfReady = new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.src = TURF.src; if (TURF.integrity) { s.integrity = TURF.integrity; s.crossOrigin = "anonymous"; }
+        s.onload = resolve;
+        s.onerror = function () { turfReady = null; reject(new Error("Could not load the map calculation library")); };
+        document.head.appendChild(s);
+      });
+      return turfReady;
+    }
+
+    // Resolve each layer's REST URL (from a direct URL or an ArcGIS item ID), cached, and read its field list
+    var layerCache = {};
+    async function getLayer(site, kind) {
+      var ck = site.key + "_" + kind;
+      if (layerCache[ck]) return layerCache[ck];
+      try { var c = JSON.parse(localStorage.getItem("rsdi_lu_v1_" + ck)); if (c && c.url && Date.now() - (c.t || 0) < 864e5) return (layerCache[ck] = c); } catch (e) {}
+      var def = site[kind];
+      var url = def.url;
+      if (!url) {
+        var r = await fetch(site.portal + "/sharing/rest/content/items/" + def.itemId + "?f=json");
+        var meta = await r.json();
+        if (meta.error || !meta.url) throw new Error("Could not read the " + site.name + " " + kind + " item. Make sure it is shared publicly");
+        url = /\/\d+$/.test(meta.url) ? meta.url : meta.url.replace(/\/$/, "") + "/" + (def.layer != null ? def.layer : 0);
+      }
+      var info = await (await fetch(url + "?f=json")).json();
+      if (info.error) throw new Error(site.name + " " + kind + " layer is not accessible (" + (info.error.message || "error") + "). Make sure it is shared publicly");
+      layerCache[ck] = { t: Date.now(), url: url, fields: (info.fields || []).map(function (f) { return f.name; }) };
+      try { localStorage.setItem("rsdi_lu_v1_" + ck, JSON.stringify(layerCache[ck])); } catch (e) {}
+      return layerCache[ck];
+    }
+    function pickField(layer, wanted, label) {
+      var hit = layer.fields.find(function (f) { return f.toLowerCase() === wanted.toLowerCase(); });
+      if (!hit) throw new Error('Field "' + wanted + '" not found in ' + label + ". Available fields: " + layer.fields.join(", "));
+      return hit;
+    }
+
+    var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
+    var show = function (cls, html) { out.innerHTML = '<div class="upi-' + cls + '">' + html + "</div>"; };
+
+    // POST avoids URL-length limits when sending a parcel geometry
+    async function query(layerUrl, params) {
+      var body = new URLSearchParams(Object.assign({ f: "geojson" }, params));
+      var ctrl = new AbortController(), timer = setTimeout(function () { ctrl.abort(); }, 30000), res;
+      try { res = await fetch(layerUrl + "/query", { method: "POST", body: body, signal: ctrl.signal }); }
+      catch (e) { throw e.name === "AbortError" ? new Error("The server took too long to respond") : e; }
+      finally { clearTimeout(timer); }
+      if (!res.ok) throw new Error("Service returned HTTP " + res.status);
+      var data = await res.json();
+      if (data.error) throw new Error(data.error.message || "Service error");
+      return data;
+    }
+
+    // Esri wants outer rings clockwise and holes counter-clockwise
+    function orientRings(polys) { var out = []; polys.forEach(function (p) { p.forEach(function (ring, i) { var s = 0; for (var k = 0; k < ring.length - 1; k++) s += (ring[k + 1][0] - ring[k][0]) * (ring[k + 1][1] + ring[k][1]); out.push((i === 0) === (s > 0) ? ring : ring.slice().reverse()); }); }); return out; }
+    function toEsriPolygon(geom) {
+      var polys = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+      return { rings: orientRings(polys), spatialReference: { wkid: 4326 } };
+    }
+
+    var asFeature = function (g) { return turf.feature(g); };
+    var area = function (f) { return f ? turf.area(f) : 0; };
+    function safe(fn) { try { return fn(); } catch (e) { console.warn(e); return null; } }
+    var union = function (a, b) { return !a ? b : !b ? a : (safe(function () { return turf.union(turf.featureCollection([a, b])); }) || a); };
+
+    async function fetchAllPlan(parcelGeom, planUrl, outFields) {
+      var feats = [];
+      var offset = 0;
+      for (var i = 0; i < 20; i++) {
+        var data = await query(planUrl, {
+          where: "1=1",
+          geometry: JSON.stringify(toEsriPolygon(parcelGeom)),
+          geometryType: "esriGeometryPolygon",
+          inSR: "4326",
+          spatialRel: "esriSpatialRelIntersects",
+          outFields: outFields,
+          returnGeometry: "true",
+          maxAllowableOffset: "0.000005",
+          geometryPrecision: "6",
+          resultOffset: offset
+        });
+        feats.push.apply(feats, data.features);
+        var more = data.exceededTransferLimit || (data.properties && data.properties.exceededTransferLimit);
+        if (!more || !data.features.length) break;
+        offset += data.features.length;
+      }
+      return feats;
+    }
+
+    // ---- "View on map" link ----
+    var enc = function (s) { return encodeURIComponent(s).replace(/['()!*]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); }); };
+
+    async function getJSON(url, ms) {
+      var ctrl = new AbortController(), t = setTimeout(function () { ctrl.abort(); }, ms || 6000);
+      try { return await (await fetch(url, { signal: ctrl.signal })).json(); } finally { clearTimeout(t); }
+    }
+
+    function parcelView(parcel) {
+      var c = turf.centroid(parcel).geometry.coordinates, lon = c[0], lat = c[1];
+      var b = turf.bbox(parcel);
+      var size = Math.max(turf.distance([b[0], b[1]], [b[2], b[1]]), turf.distance([b[0], b[1]], [b[0], b[3]])) * 1000;
+      var scale = Math.max(500, Math.ceil(size * 10 / 100) * 100);
+      var R = 6378137;
+      var x = lon * Math.PI / 180 * R;
+      var y = Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) * R;
+      return { lon: lon, lat: lat, x: x, y: y, scale: scale };
+    }
+
+    /* ---- Experience Builder (Muhanga) ---- */
+    var expCfgCache = {};
+    async function getExpConfig(site) {
+      if (expCfgCache[site.key]) return expCfgCache[site.key];
+      var m = site.map.url.match(/\/experience\/([0-9a-f]{32})/i);
+      if (!m) return null;
+      try { expCfgCache[site.key] = await getJSON(site.portal + "/sharing/rest/content/items/" + m[1] + "/data?f=json"); }
+      catch (e) { console.warn("Could not read the Experience config", e); }
+      return expCfgCache[site.key];
+    }
+
+    async function findMapWidgets(site) {
+      var cfg = await getExpConfig(site);
+      var found = Object.entries((cfg && cfg.widgets) || {})
+        .filter(function (e) { var w = e[1]; return /arcgis-map\/?$/.test((w && (w.uri || (w.manifest && w.manifest.name))) || ""); })
+        .map(function (e) { var u = (e[1].useDataSources || [])[0] || {}; return { id: e[0], ds: u.mainDataSourceId || u.dataSourceId || "" }; });
+      if (site.map.widgetId) {
+        return site.map.widgetId.split(",").map(function (x) { return x.trim(); }).filter(Boolean)
+          .map(function (id) { return found.find(function (f) { return f.id === id; }) || { id: id, ds: "" }; });
+      }
+      return found.length ? found : [{ id: "map_1", ds: "" }];
+    }
+
+    var webMapCache = {};
+    async function parcelDataSourceIds(site, mapDs, widgetId) {
+      if (site.map.dataSourceId) return site.map.dataSourceId.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+      try {
+        var cfg = await getExpConfig(site);
+        var ds = cfg && cfg.dataSources && cfg.dataSources[mapDs];
+        if (!ds || !ds.itemId) return [];
+        var wm = webMapCache[ds.itemId] || (webMapCache[ds.itemId] = await getJSON(site.portal + "/sharing/rest/content/items/" + ds.itemId + "/data?f=json"));
+        var pl = await getLayer(site, "parcels");
+        var norm = function (u) { return String(u || "").toLowerCase().replace(/\/$/, ""); };
+        var hits = [];
+        var walk = function (ls) { (ls || []).forEach(function (l) {
+          if ((l.url && norm(l.url) === norm(pl.url)) || (l.itemId && l.itemId === site.parcels.itemId)) hits.push(l.id);
+          walk(l.layers);
+        }); };
+        walk(wm.operationalLayers);
+        return hits.flatMap(function (id) { return [mapDs + "-" + id, widgetId + "-" + mapDs + "-" + id]; });
+      } catch (e) { console.warn("Could not work out the parcel data source ID", e); return []; }
+    }
+
+    async function buildExpUrl(site, upi, parcel, upiField) {
+      var base = site.map.url.split(/[?#]/)[0].replace(/\/$/, "") + "/";
+      var widgets = await findMapWidgets(site);
+      var v = parcelView(parcel);
+      var sel = [];
+      if (site.map.select) {
+        var lists = await Promise.all(widgets.map(function (w) { return parcelDataSourceIds(site, w.ds, w.id); }));
+        sel = Array.from(new Set(lists.flat()));
+      }
+      var val = "center:" + enc(v.x.toFixed(2) + "," + v.y.toFixed(2) + ",102100") + ",scale:" + v.scale;
+      if (site.map.marker && !sel.length) val += ",marker:" + enc(v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ";;" + upi + ";" + upi);
+      var parts = widgets.map(function (w) { return w.id + "=" + val; });
+      if (sel.length) {
+        var where = enc(upiField + "='" + upi.replace(/'/g, "''") + "'");
+        parts.push("data_s=" + sel.map(function (id) { return "where:" + id + ":" + where; }).join(","));
+      }
+      return base + "#" + parts.join("&");
+    }
+
+    /* ---- Web AppBuilder (Kigali) ---- */
+    var wabLayerCache = {};
+    async function getWabLayerId(site) {
+      if (wabLayerCache[site.key] !== undefined) return wabLayerCache[site.key];
+      if (site.map.layerId) return (wabLayerCache[site.key] = site.map.layerId);
+      wabLayerCache[site.key] = "";
+      try {
+        var m = site.map.url.match(/[?&]id=([0-9a-f]{32})/i);
+        if (!m) return "";
+        var app = await getJSON(site.portal + "/sharing/rest/content/items/" + m[1] + "/data?f=json");
+        var mapId = app && app.map && app.map.itemId;
+        if (!mapId) return "";
+        var wm = await getJSON(site.portal + "/sharing/rest/content/items/" + mapId + "/data?f=json");
+        var pl = await getLayer(site, "parcels");
+        var norm = function (u) { return String(u || "").toLowerCase().replace(/\/$/, ""); };
+        var walk = function (ls) { return (ls || []).some(function (l) {
+          if (l.url && norm(l.url) === norm(pl.url)) { wabLayerCache[site.key] = l.id; return true; }
+          return walk(l.layers);
+        }); };
+        walk(wm.operationalLayers);
+      } catch (e) { console.warn("Could not work out the parcel layer id in the app", e); }
+      return wabLayerCache[site.key];
+    }
+
+    async function buildWabUrl(site, upi, parcel, upiField) {
+      var base = site.map.url.split("#")[0];
+      var sep = base.indexOf("?") >= 0 ? "&" : "?";
+      var layerId = site.map.select ? await getWabLayerId(site) : "";
+      if (layerId) return base + sep + "query=" + enc(layerId) + "," + enc(upiField) + "," + enc(upi);
+      var v = parcelView(parcel);
+      var url = base + sep + "center=" + v.x.toFixed(2) + "," + v.y.toFixed(2) + ",102100&scale=" + v.scale;
+      if (site.map.marker) url += "&marker=" + v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ",4326,," + enc(upi) + "," + enc(upi);
+      return url;
+    }
+
+    async function buildMapUrl(site, upi, parcel, upiField) {
+      var url = site.map.type === "wab" ? await buildWabUrl(site, upi, parcel, upiField) : await buildExpUrl(site, upi, parcel, upiField);
+      console.info("Map link:", url);
+      return url;
+    }
+
+    var fmt = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 1 }); };
+    var tabsEl = $("upiTabs"), ctx = null;
+
+    function errText(e) {
+      if (/not found in/.test(e.message)) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("rsdi_lu_v1_") === 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (x) {} }
+      return "Could not complete the search: " + esc(e instanceof TypeError ? "Could not reach the mapping server (network problem, or the server does not allow this website)" : e.message) + ". Check that the layers are shared publicly.";
+    }
+
+    function render(res) {
+      var c = ctx;
+      var html = '<h3 class="upi-h">UPI ' + esc(c.upi) + '</h3><div class="upi-meta">' + esc(c.site.name) + " &middot; Parcel area " + fmt(c.parcelArea) + " m²</div>";
+      if (res.msg) html += '<div class="upi-msg">' + esc(res.msg) + "</div>";
+      else if (res.err) html += '<div class="upi-err">' + res.err + "</div>";
+      else html += res.rows.map(function (r) {
+        var pct = r.a / c.parcelArea * 100;
+        return '<div class="upi-zone ' + (r.un ? "upi-un" : "") + '">' +
+          '<div class="upi-top"><span>' + esc(r.zone) + "</span><span>" + pct.toFixed(1) + "%</span></div>" +
+          (r.use ? '<div class="upi-sub">' + esc(r.use) + "</div>" : "") +
+          '<div class="upi-sub">' + fmt(r.a) + " m²</div>" +
+          '<div class="upi-bar"><i style="width:' + Math.min(pct, 100) + '%"></i></div></div>';
+      }).join("");
+      var notes = [];
+      if (res.rows) notes.push("Areas are calculated from the layer geometries and are indicative.");
+      if (c.parcelCount > 1) notes.push(c.parcelCount + " parcels share this UPI; the first is shown.");
+      if (res.hidden) notes.push(res.hidden + " tiny overlap(s) under " + COMMON.minPercent + "% were ignored.");
+      if (c.otherSites.length) notes.push("This UPI also exists in " + esc(c.otherSites.join(", ")) + "; " + esc(c.site.name) + " is shown.");
+      out.innerHTML = html +
+        '<a class="upi-mapbtn" href="' + esc(c.mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
+        '<div class="upi-note">' + notes.join(" ") + "</div>";
+    }
+
+    // Overlay the parcel with one plan layer ("plan" = zoning, "physical" = physical plan) and work out the percentages
+    async function analyse(c, kind) {
+      var site = c.site, label = kind === "physical" ? "physical plan" : "zoning";
+      var def = kind === "physical" ? (site.physical || {}) : { url: site.plan.url, itemId: site.plan.itemId, zoneField: site.zoneField, useField: site.useField };
+      if (!(def.url || def.itemId) || !def.zoneField) return { msg: "The " + label + " for " + site.name + " is not available in this search yet." };
+      var planLayer = await getLayer(site, kind);
+      var zoneF = pickField(planLayer, def.zoneField, "the " + site.name + " " + label + " layer");
+      var useF = def.useField ? pickField(planLayer, def.useField, "the " + site.name + " " + label + " layer") : "";
+      var outFields = [zoneF, useF].filter(Boolean).join(",");
+      var parcel = c.parcel, parcelArea = c.parcelArea;
+
+      // Fast path: if one zone wholly contains the parcel, the answer is 100%
+      var whole = await query(planLayer.url, {
+        where: "1=1",
+        geometry: JSON.stringify(toEsriPolygon(c.geom)),
+        geometryType: "esriGeometryPolygon",
+        inSR: "4326",
+        spatialRel: "esriSpatialRelContains",
+        outFields: outFields,
+        returnGeometry: "false"
+      });
+      if (whole.features.length === 1) {
+        var pr = whole.features[0].properties;
+        return { rows: [{ zone: pr[zoneF] != null ? pr[zoneF] : "Unspecified", use: useF ? (pr[useF] != null ? pr[useF] : "") : "", a: parcelArea }], hidden: 0 };
+      }
+
+      var plan = await fetchAllPlan(c.geom, planLayer.url, outFields);
+      if (!plan.length) return { msg: "The parcel was found, but the " + label + " does not cover it." };
+
+      var groups = new Map();
+      var bb = turf.bbox(parcel);
+      plan.forEach(function (f) {
+        var piece = safe(function () { return turf.intersect(turf.featureCollection([parcel, turf.bboxClip(asFeature(f.geometry), bb)])); });
+        if (!piece) return;
+        var zone = f.properties[zoneF] != null ? f.properties[zoneF] : "Unspecified";
+        var use = useF ? (f.properties[useF] != null ? f.properties[useF] : "") : "";
+        var key = zone + "|" + use;
+        var g = groups.get(key) || { zone: zone, use: use, geom: null };
+        g.geom = union(g.geom, piece);
+        groups.set(key, g);
+      });
+
+      var covered = null;
+      var rows = [];
+      Array.from(groups.values()).sort(function (a, b) { return area(b.geom) - area(a.geom); }).forEach(function (g) {
+        var own = covered ? safe(function () { return turf.difference(turf.featureCollection([g.geom, covered])); }) : g.geom;
+        var a = area(own);
+        covered = union(covered, g.geom);
+        if (a > 0) rows.push({ zone: g.zone, use: g.use, geom: g.geom, a: a });
+      });
+
+      var visible = rows.filter(function (r) { return r.a / parcelArea * 100 >= COMMON.minPercent; });
+      var hiddenCount = rows.length - visible.length;
+      var usedArea = Math.min(area(covered), parcelArea);
+      var unzoned = Math.max(parcelArea - usedArea, 0);
+      if (unzoned / parcelArea * 100 >= COMMON.minPercent) visible.push({ zone: "Not covered by any " + (kind === "physical" ? "plan area" : "zone"), use: "", a: unzoned, un: true });
+      return { rows: visible, hidden: hiddenCount };
+    }
+
+    // Each tab is calculated once per search and remembered, so switching back and forth is instant
+    function getResult(c, kind) {
+      if (!c.jobs[kind]) c.jobs[kind] = analyse(c, kind).catch(function (e) {
+        console.error(e); delete c.jobs[kind]; return { err: errText(e) };
+      });
+      return c.jobs[kind];
+    }
+
+    async function showTab(kind) {
+      var c = ctx; c.tab = kind;
+      Array.prototype.forEach.call(tabsEl.children, function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-tab") === kind)); });
+      show("msg", kind === "physical" ? "Checking the physical plan…" : "Checking the zoning…");
+      var res = await getResult(c, kind);
+      if (ctx === c && c.tab === kind) render(res);
+    }
+    tabsEl.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".upi-tab") : null;
+      if (b && ctx && ctx.tab !== b.getAttribute("data-tab")) showTab(b.getAttribute("data-tab"));
+    });
+
+    async function run() {
+      var upi = input.value.replace(/\\/g, "/").replace(/\s+/g, "");
+      ctx = null; tabsEl.hidden = true;
+      if (!upi) return show("err", "Enter a UPI to search.");
+      go.disabled = true;
+      show("msg", "Finding the parcel…");
+      try {
+        await loadTurf();
+        var byPrefix = SITES.filter(function (s) { return s.upiPrefix && upi.indexOf(s.upiPrefix) === 0; });
+        var candidates = byPrefix.length ? byPrefix : SITES;
+        var results = await Promise.allSettled(candidates.map(async function (site) {
+          var layer = await getLayer(site, "parcels");
+          var upiF = pickField(layer, site.upiField, "the " + site.name + " parcel layer");
+          var p = await query(layer.url, {
+            where: upiF + "='" + upi.replace(/'/g, "''") + "'",
+            outFields: upiF,
+            returnGeometry: "true"
+          });
+          return { site: site, upiF: upiF, p: p };
+        }));
+        var hits = results.filter(function (r) { return r.status === "fulfilled" && r.value.p.features.length; }).map(function (r) { return r.value; });
+        if (!hits.length) {
+          var failed = results.map(function (r, i) { return r.status === "rejected" ? candidates[i].name + " (" + r.reason.message + ")" : null; }).filter(Boolean);
+          results.forEach(function (r) { if (r.status === "rejected") console.error(r.reason); });
+          return show("err", "No parcel found for UPI <b>" + esc(upi) + "</b>. Check the number and try again." +
+            (failed.length ? "<br><br>Some areas could not be searched: " + esc(failed.join("; ")) : ""));
+        }
+        var site = hits[0].site, upiF = hits[0].upiF, p = hits[0].p;
+        var geom = p.features[0].geometry;
+        var parcel = asFeature(geom);
+        var parcelArea = area(parcel);
+        if (!parcelArea) return show("err", "This parcel has no usable geometry.");
+        var mapUrl = await buildMapUrl(site, upi, parcel, upiF);
+
+        ctx = { site: site, upi: upi, geom: geom, parcel: parcel, parcelArea: parcelArea, parcelCount: p.features.length,
+                mapUrl: mapUrl, otherSites: hits.slice(1).map(function (h) { return h.site.name; }), jobs: {}, tab: "plan" };
+        tabsEl.hidden = false;
+        var c = ctx;
+        await showTab("plan");                       // zoning first
+        getResult(c, "physical");                    // calculate the physical plan in the background
+      } catch (e) {
+        console.error(e);
+        tabsEl.hidden = true; ctx = null;
+        show("err", errText(e));
+      } finally {
+        go.disabled = false;
+      }
+    }
+
+    go.onclick = run;
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter" && !go.disabled) run(); });
+
+    
+    function warm() {
+      loadTurf().catch(function () {});
+      SITES.forEach(function (s) {
+        getLayer(s, "parcels").catch(function () {}); getLayer(s, "plan").catch(function () {});
+        if (s.physical && (s.physical.url || s.physical.itemId)) getLayer(s, "physical").catch(function () {});
+        (s.map.type === "exp" ? findMapWidgets(s) : getWabLayerId(s)).catch(function () {});
+      });
+    }
+    if (!opts.deferWarm) warm();
+
+    if (opts.modal && window.jQuery) {
+      var jq = window.jQuery;
+      jq("#rsdiUpiModal").off(".rsdi")
+        .on("show.bs.modal.rsdi", function () { var c = jq("#rsdiChatModal"); if (c.hasClass("in")) c.modal("hide"); })
+        .on("shown.bs.modal.rsdi", function () { input.focus(); });
+      jq(document).off("hidden.bs.modal.rsdi").on("hidden.bs.modal.rsdi", function () { if (jq(".modal.in").length) jq("body").addClass("modal-open"); });
+    }
+    input.focus();
+    return { focus: function () { input.focus(); }, warm: warm };
+  }
+
+  window.RSDI_UPI = { mount: mount };
+})();
