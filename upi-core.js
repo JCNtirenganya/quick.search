@@ -92,13 +92,6 @@
         upiField: "upi",
         zoneField: "new_zoning",
         useField: "",
-        // Second tab. Leave url/itemId empty until the layer is ready: the tab then says "not available yet".
-        physical: {
-          url: "",         // direct REST URL ending in /FeatureServer/0 ... or use itemId + layer below
-          itemId: "", layer: 0,
-          zoneField: "",   // field holding the land-use / category name
-          useField: ""     // optional second line (leave "" if none)
-        },
         map: {
           type: "wab",
           url: "https://masterplan.kigalicity.gov.rw/portal/apps/webappviewer/index.html?id=fdd2e30cbc15401d9daee5f68982d755",
@@ -116,13 +109,6 @@
         upiField: "UPI",
         zoneField: "Zoning",
         useField: "",
-        // Second tab. Leave url/itemId empty until the layer is ready: the tab then says "not available yet".
-        physical: {
-          url: "",         // direct REST URL ending in /FeatureServer/0 ... or use itemId + layer below
-          itemId: "", layer: 0,
-          zoneField: "",   // field holding the land-use / category name
-          useField: ""     // optional second line (leave "" if none)
-        },
         map: {
           type: "exp",
           url: "https://experience.arcgis.com/experience/19333efca3744cf3ab27ba4da073d49f",
@@ -133,6 +119,23 @@
         }
       }
     ];
+
+    // Physical plan (second tab): ONE layer for the whole country, shared by every site. New districts are appended to this layer.
+    var PHYSICAL = {
+      itemId: "94eccc60da464df1829748cbd6f0bccf", layer: 0,   // or url: ".../FeatureServer/0"
+      portal: "https://rla.maps.arcgis.com",
+      zoneField: "zoning",    // main line
+      useField: "remarks",    // status, shown under it
+      map: {                  // opened from the Physical plan tab
+        type: "exp",
+        url: "https://experience.arcgis.com/experience/a8a812fff1a94b388f782c7308a3653e",
+        widgetId: "",         // empty = find the map widget(s) automatically
+        select: true,         // selects the parcel if the experience's map contains the site's parcel layer, else drops a marker
+        marker: true,
+        dataSourceId: ""
+      }
+    };
+    var PHYS_SITE = { key: "physical", name: "Physical plan", portal: PHYSICAL.portal, physical: PHYSICAL };
     /* ========================================= */
 
     var $ = function (id) { return document.getElementById(id); };
@@ -361,7 +364,7 @@
       return "Could not complete the search: " + esc(e instanceof TypeError ? "Could not reach the mapping server (network problem, or the server does not allow this website)" : e.message) + ". Check that the layers are shared publicly.";
     }
 
-    function render(res) {
+    function render(res, mapUrl) {
       var c = ctx;
       var html = '<h3 class="upi-h">UPI ' + esc(c.upi) + '</h3><div class="upi-meta">' + esc(c.site.name) + " &middot; Parcel area " + fmt(c.parcelArea) + " m²</div>";
       if (res.msg) html += '<div class="upi-msg">' + esc(res.msg) + "</div>";
@@ -380,18 +383,19 @@
       if (res.hidden) notes.push(res.hidden + " tiny overlap(s) under " + COMMON.minPercent + "% were ignored.");
       if (c.otherSites.length) notes.push("This UPI also exists in " + esc(c.otherSites.join(", ")) + "; " + esc(c.site.name) + " is shown.");
       out.innerHTML = html +
-        '<a class="upi-mapbtn" href="' + esc(c.mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
+        '<a class="upi-mapbtn" href="' + esc(mapUrl || c.mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
         '<div class="upi-note">' + notes.join(" ") + "</div>";
     }
 
     // Overlay the parcel with one plan layer ("plan" = zoning, "physical" = physical plan) and work out the percentages
     async function analyse(c, kind) {
-      var site = c.site, label = kind === "physical" ? "physical plan" : "zoning";
-      var def = kind === "physical" ? (site.physical || {}) : { url: site.plan.url, itemId: site.plan.itemId, zoneField: site.zoneField, useField: site.useField };
-      if (!(def.url || def.itemId) || !def.zoneField) return { msg: "The " + label + " for " + site.name + " is not available in this search yet." };
+      var phys = kind === "physical", site = phys ? PHYS_SITE : c.site, label = phys ? "physical plan" : "zoning";
+      var def = phys ? PHYSICAL : { url: site.plan.url, itemId: site.plan.itemId, zoneField: site.zoneField, useField: site.useField };
+      if (!(def.url || def.itemId) || !def.zoneField) return { msg: "The " + label + " for " + c.site.name + " is not available in this search yet." };
       var planLayer = await getLayer(site, kind);
-      var zoneF = pickField(planLayer, def.zoneField, "the " + site.name + " " + label + " layer");
-      var useF = def.useField ? pickField(planLayer, def.useField, "the " + site.name + " " + label + " layer") : "";
+      var who = phys ? "the " + label + " layer" : "the " + site.name + " " + label + " layer";
+      var zoneF = pickField(planLayer, def.zoneField, who);
+      var useF = def.useField ? pickField(planLayer, def.useField, who) : "";
       var outFields = [zoneF, useF].filter(Boolean).join(",");
       var parcel = c.parcel, parcelArea = c.parcelArea;
 
@@ -451,12 +455,21 @@
       return c.jobs[kind];
     }
 
+    // The Physical plan tab opens its own map (PHYSICAL.map); otherwise it uses the zoning map
+    async function getMapUrl(c, kind) {
+      var m = kind === "physical" && PHYSICAL.map;
+      if (!m || !m.url) return c.mapUrl;
+      if (!c.mapJobs[kind]) c.mapJobs[kind] = buildMapUrl(Object.assign({}, c.site, { key: c.site.key + "_physical", portal: PHYSICAL.portal, map: m }), c.upi, c.parcel, c.upiF)
+        .catch(function (e) { console.warn(e); return c.mapUrl; });
+      return c.mapJobs[kind];
+    }
+
     async function showTab(kind) {
       var c = ctx; c.tab = kind;
       Array.prototype.forEach.call(tabsEl.children, function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-tab") === kind)); });
       show("msg", kind === "physical" ? "Checking the physical plan…" : "Checking the zoning…");
-      var res = await getResult(c, kind);
-      if (ctx === c && c.tab === kind) render(res);
+      var res = await getResult(c, kind), mapUrl = await getMapUrl(c, kind);
+      if (ctx === c && c.tab === kind) render(res, mapUrl);
     }
     tabsEl.addEventListener("click", function (e) {
       var b = e.target.closest ? e.target.closest(".upi-tab") : null;
@@ -498,7 +511,7 @@
         var mapUrl = await buildMapUrl(site, upi, parcel, upiF);
 
         ctx = { site: site, upi: upi, geom: geom, parcel: parcel, parcelArea: parcelArea, parcelCount: p.features.length,
-                mapUrl: mapUrl, otherSites: hits.slice(1).map(function (h) { return h.site.name; }), jobs: {}, tab: "plan" };
+                mapUrl: mapUrl, otherSites: hits.slice(1).map(function (h) { return h.site.name; }), upiF: upiF, jobs: {}, mapJobs: {}, tab: "plan" };
         tabsEl.hidden = false;
         var c = ctx;
         await showTab("plan");                       // zoning first
@@ -518,9 +531,9 @@
     
     function warm() {
       loadTurf().catch(function () {});
+      getLayer(PHYS_SITE, "physical").catch(function () {});
       SITES.forEach(function (s) {
         getLayer(s, "parcels").catch(function () {}); getLayer(s, "plan").catch(function () {});
-        if (s.physical && (s.physical.url || s.physical.itemId)) getLayer(s, "physical").catch(function () {});
         (s.map.type === "exp" ? findMapWidgets(s) : getWabLayerId(s)).catch(function () {});
       });
     }
