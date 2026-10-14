@@ -383,7 +383,7 @@
       if (res.hidden) notes.push(res.hidden + " tiny overlap(s) under " + COMMON.minPercent + "% were ignored.");
       if (c.otherSites.length) notes.push("This UPI also exists in " + esc(c.otherSites.join(", ")) + "; " + esc(c.site.name) + " is shown.");
       out.innerHTML = html +
-        '<a class="upi-mapbtn" href="' + esc(mapUrl || c.mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
+        '<a class="upi-mapbtn" href="' + esc(mapUrl || c.mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the ' + (c.tab === "physical" ? "physical plan map" : "zoning map") + "</a>" +
         '<div class="upi-note">' + notes.join(" ") + "</div>";
     }
 
