@@ -130,6 +130,8 @@
         type: "exp",
         url: "https://experience.arcgis.com/experience/a8a812fff1a94b388f782c7308a3653e",
         widgetId: "",         // empty = find the map widget(s) automatically
+        search: true,         // type the UPI into the app's Search widget so it zooms to and highlights the parcel
+        searchWidgetId: "",   // empty = find the Search widget(s) automatically
         parcelTitle: "",      // parcel layer name in that map; empty = "<site name> Parcels" (e.g. "Muhanga Parcels")
         select: true,         // selects the parcel if the experience's map contains the site's parcel layer, else drops a marker
         marker: true,
@@ -277,6 +279,15 @@
       return found.length ? found : [{ id: "map_1", ds: "" }];
     }
 
+    // The Experience's Search widget(s): the UPI is typed into them through the URL so the app zooms to and highlights the parcel itself
+    async function findSearchWidgets(site) {
+      if (site.map.searchWidgetId) return site.map.searchWidgetId.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+      var cfg = await getExpConfig(site);
+      return Object.entries((cfg && cfg.widgets) || {})
+        .filter(function (e) { var w = e[1]; return /(^|\/)search\/?$/.test((w && (w.uri || (w.manifest && w.manifest.name))) || ""); })
+        .map(function (e) { return e[0]; });
+    }
+
     var webMapCache = {};
     async function parcelDataSourceIds(site, mapDs, widgetId) {
       if (site.map.dataSourceId) return site.map.dataSourceId.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
@@ -307,13 +318,15 @@
         var lists = await Promise.all(widgets.map(function (w) { return parcelDataSourceIds(site, w.ds, w.id); }));
         sel = Array.from(new Set(lists.flat()));
       }
+      var sw = site.map.search ? await findSearchWidgets(site) : [];
       var val = "center:" + enc(v.x.toFixed(2) + "," + v.y.toFixed(2) + ",102100") + ",scale:" + v.scale;
-      if (site.map.marker && !sel.length) val += ",marker:" + enc(v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ";;" + upi + ";" + upi);
+      if (site.map.marker && !sel.length && !sw.length) val += ",marker:" + enc(v.lon.toFixed(7) + "," + v.lat.toFixed(7) + ";;" + upi + ";" + upi);
       var parts = widgets.map(function (w) { return w.id + "=" + val; });
       if (sel.length) {
         var where = enc(upiField + "='" + upi.replace(/'/g, "''") + "'");
         parts.push("data_s=" + sel.map(function (id) { return "where:" + id + ":" + where; }).join(","));
       }
+      sw.forEach(function (id) { parts.push(id + "=text:" + enc(upi)); });
       return base + "#" + parts.join("&");
     }
 
