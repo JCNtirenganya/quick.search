@@ -31,6 +31,12 @@
     .upi-go:hover { background:var(--accent-d); }
     .upi-go:disabled { opacity:.6; cursor:wait; }
     .upi-close:focus-visible, .upi-go:focus-visible, .upi-input:focus-visible { outline:3px solid #0a4f45; outline-offset:2px; }
+    .upi-tabs { display:flex; margin-top:12px; border:2px solid var(--accent); border-radius:6px; overflow:hidden; }
+    .upi-tabs[hidden] { display:none; }
+    .upi-tab { flex:1; border:0; background:#fff; color:var(--accent); padding:7px 10px; font:inherit; font-weight:600; cursor:pointer; }
+    .upi-tab + .upi-tab { border-left:2px solid var(--accent); }
+    .upi-tab[aria-selected="true"] { background:var(--accent); color:#fff; }
+    .upi-tab:focus-visible { outline:3px solid #0a4f45; outline-offset:-3px; }
     .upi-out:empty { display:none; }
     .upi-out { margin-top:12px; }
     .upi-msg { color:var(--muted); }
@@ -53,6 +59,9 @@
     '<label for="upiInput"><b>Shyiramo UPI</b>/Type the UPI</label>' +
     '<div class="upi-row"><input class="upi-input" id="upiInput" type="text" placeholder="e.g. 1/02/03/04/0005" autocomplete="off">' +
     '<button class="upi-go" id="upiGo" type="button">Search</button></div>' +
+    '<div class="upi-tabs" id="upiTabs" role="tablist" hidden>' +
+    '<button type="button" class="upi-tab" role="tab" data-tab="plan" aria-selected="true">Zoning</button>' +
+    '<button type="button" class="upi-tab" role="tab" data-tab="physical" aria-selected="false">Physical plan</button></div>' +
     '<div class="upi-out" id="upiOut" aria-live="polite"></div>';
 
   function mount(root, opts) {
@@ -87,6 +96,13 @@
         upiField: "upi",
         zoneField: "new_zoning",
         useField: "",
+        // Second tab. Leave url/itemId empty until the layer is ready: the tab then says "not available yet".
+        physical: {
+          url: "",         // direct REST URL ending in /FeatureServer/0 ... or use itemId + layer below
+          itemId: "", layer: 0,
+          zoneField: "",   // field holding the land-use / category name
+          useField: ""     // optional second line (leave "" if none)
+        },
         map: {
           type: "wab",
           url: "https://masterplan.kigalicity.gov.rw/portal/apps/webappviewer/index.html?id=fdd2e30cbc15401d9daee5f68982d755",
@@ -104,6 +120,13 @@
         upiField: "UPI",
         zoneField: "Zoning",
         useField: "",
+        // Second tab. Leave url/itemId empty until the layer is ready: the tab then says "not available yet".
+        physical: {
+          url: "",         // direct REST URL ending in /FeatureServer/0 ... or use itemId + layer below
+          itemId: "", layer: 0,
+          zoneField: "",   // field holding the land-use / category name
+          useField: ""     // optional second line (leave "" if none)
+        },
         map: {
           type: "exp",
           url: "https://experience.arcgis.com/experience/19333efca3744cf3ab27ba4da073d49f",
@@ -335,29 +358,121 @@
     }
 
     var fmt = function (n) { return n.toLocaleString(undefined, { maximumFractionDigits: 1 }); };
-    function render(site, upi, parcelArea, visible, parcelCount, hiddenCount, mapUrl, otherSites) {
-      out.innerHTML =
-        '<h3 class="upi-h">UPI ' + esc(upi) + '</h3><div class="upi-meta">' + esc(site.name) + " &middot; Parcel area " + fmt(parcelArea) + " m²</div>" +
-        visible.map(function (r) {
-          var pct = r.a / parcelArea * 100;
-          return '<div class="upi-zone ' + (r.un ? "upi-un" : "") + '">' +
-            '<div class="upi-top"><span>' + esc(r.zone) + "</span><span>" + pct.toFixed(1) + "%</span></div>" +
-            (r.use ? '<div class="upi-sub">' + esc(r.use) + "</div>" : "") +
-            '<div class="upi-sub">' + fmt(r.a) + " m²</div>" +
-            '<div class="upi-bar"><i style="width:' + Math.min(pct, 100) + '%"></i></div></div>';
-        }).join("") +
-        '<a class="upi-mapbtn" href="' + esc(mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
-        '<div class="upi-note">Areas are calculated from the layer geometries and are indicative.' +
-        (parcelCount > 1 ? " " + parcelCount + " parcels share this UPI; the first is shown." : "") +
-        (hiddenCount ? " " + hiddenCount + " tiny overlap(s) under " + COMMON.minPercent + "% were ignored." : "") +
-        (otherSites.length ? " This UPI also exists in " + esc(otherSites.join(", ")) + "; " + esc(site.name) + " is shown." : "") + "</div>";
+    var tabsEl = $("upiTabs"), ctx = null;
+
+    function errText(e) {
+      if (/not found in/.test(e.message)) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("rsdi_lu_v1_") === 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (x) {} }
+      return "Could not complete the search: " + esc(e instanceof TypeError ? "Could not reach the mapping server (network problem, or the server does not allow this website)" : e.message) + ". Check that the layers are shared publicly.";
     }
+
+    function render(res) {
+      var c = ctx;
+      var html = '<h3 class="upi-h">UPI ' + esc(c.upi) + '</h3><div class="upi-meta">' + esc(c.site.name) + " &middot; Parcel area " + fmt(c.parcelArea) + " m²</div>";
+      if (res.msg) html += '<div class="upi-msg">' + esc(res.msg) + "</div>";
+      else if (res.err) html += '<div class="upi-err">' + res.err + "</div>";
+      else html += res.rows.map(function (r) {
+        var pct = r.a / c.parcelArea * 100;
+        return '<div class="upi-zone ' + (r.un ? "upi-un" : "") + '">' +
+          '<div class="upi-top"><span>' + esc(r.zone) + "</span><span>" + pct.toFixed(1) + "%</span></div>" +
+          (r.use ? '<div class="upi-sub">' + esc(r.use) + "</div>" : "") +
+          '<div class="upi-sub">' + fmt(r.a) + " m²</div>" +
+          '<div class="upi-bar"><i style="width:' + Math.min(pct, 100) + '%"></i></div></div>';
+      }).join("");
+      var notes = [];
+      if (res.rows) notes.push("Areas are calculated from the layer geometries and are indicative.");
+      if (c.parcelCount > 1) notes.push(c.parcelCount + " parcels share this UPI; the first is shown.");
+      if (res.hidden) notes.push(res.hidden + " tiny overlap(s) under " + COMMON.minPercent + "% were ignored.");
+      if (c.otherSites.length) notes.push("This UPI also exists in " + esc(c.otherSites.join(", ")) + "; " + esc(c.site.name) + " is shown.");
+      out.innerHTML = html +
+        '<a class="upi-mapbtn" href="' + esc(c.mapUrl) + '" target="' + COMMON.target + '" rel="noopener">View this parcel on the map</a>' +
+        '<div class="upi-note">' + notes.join(" ") + "</div>";
+    }
+
+    // Overlay the parcel with one plan layer ("plan" = zoning, "physical" = physical plan) and work out the percentages
+    async function analyse(c, kind) {
+      var site = c.site, label = kind === "physical" ? "physical plan" : "zoning";
+      var def = kind === "physical" ? (site.physical || {}) : { url: site.plan.url, itemId: site.plan.itemId, zoneField: site.zoneField, useField: site.useField };
+      if (!(def.url || def.itemId) || !def.zoneField) return { msg: "The " + label + " for " + site.name + " is not available in this search yet." };
+      var planLayer = await getLayer(site, kind);
+      var zoneF = pickField(planLayer, def.zoneField, "the " + site.name + " " + label + " layer");
+      var useF = def.useField ? pickField(planLayer, def.useField, "the " + site.name + " " + label + " layer") : "";
+      var outFields = [zoneF, useF].filter(Boolean).join(",");
+      var parcel = c.parcel, parcelArea = c.parcelArea;
+
+      // Fast path: if one zone wholly contains the parcel, the answer is 100%
+      var whole = await query(planLayer.url, {
+        where: "1=1",
+        geometry: JSON.stringify(toEsriPolygon(c.geom)),
+        geometryType: "esriGeometryPolygon",
+        inSR: "4326",
+        spatialRel: "esriSpatialRelContains",
+        outFields: outFields,
+        returnGeometry: "false"
+      });
+      if (whole.features.length === 1) {
+        var pr = whole.features[0].properties;
+        return { rows: [{ zone: pr[zoneF] != null ? pr[zoneF] : "Unspecified", use: useF ? (pr[useF] != null ? pr[useF] : "") : "", a: parcelArea }], hidden: 0 };
+      }
+
+      var plan = await fetchAllPlan(c.geom, planLayer.url, outFields);
+      if (!plan.length) return { msg: "The parcel was found, but the " + label + " does not cover it." };
+
+      var groups = new Map();
+      var bb = turf.bbox(parcel);
+      plan.forEach(function (f) {
+        var piece = safe(function () { return turf.intersect(turf.featureCollection([parcel, turf.bboxClip(asFeature(f.geometry), bb)])); });
+        if (!piece) return;
+        var zone = f.properties[zoneF] != null ? f.properties[zoneF] : "Unspecified";
+        var use = useF ? (f.properties[useF] != null ? f.properties[useF] : "") : "";
+        var key = zone + "|" + use;
+        var g = groups.get(key) || { zone: zone, use: use, geom: null };
+        g.geom = union(g.geom, piece);
+        groups.set(key, g);
+      });
+
+      var covered = null;
+      var rows = [];
+      Array.from(groups.values()).sort(function (a, b) { return area(b.geom) - area(a.geom); }).forEach(function (g) {
+        var own = covered ? safe(function () { return turf.difference(turf.featureCollection([g.geom, covered])); }) : g.geom;
+        var a = area(own);
+        covered = union(covered, g.geom);
+        if (a > 0) rows.push({ zone: g.zone, use: g.use, geom: g.geom, a: a });
+      });
+
+      var visible = rows.filter(function (r) { return r.a / parcelArea * 100 >= COMMON.minPercent; });
+      var hiddenCount = rows.length - visible.length;
+      var usedArea = Math.min(area(covered), parcelArea);
+      var unzoned = Math.max(parcelArea - usedArea, 0);
+      if (unzoned / parcelArea * 100 >= COMMON.minPercent) visible.push({ zone: "Not covered by any " + (kind === "physical" ? "plan area" : "zone"), use: "", a: unzoned, un: true });
+      return { rows: visible, hidden: hiddenCount };
+    }
+
+    // Each tab is calculated once per search and remembered, so switching back and forth is instant
+    function getResult(c, kind) {
+      if (!c.jobs[kind]) c.jobs[kind] = analyse(c, kind).catch(function (e) {
+        console.error(e); delete c.jobs[kind]; return { err: errText(e) };
+      });
+      return c.jobs[kind];
+    }
+
+    async function showTab(kind) {
+      var c = ctx; c.tab = kind;
+      Array.prototype.forEach.call(tabsEl.children, function (b) { b.setAttribute("aria-selected", String(b.getAttribute("data-tab") === kind)); });
+      show("msg", kind === "physical" ? "Checking the physical plan…" : "Checking the zoning…");
+      var res = await getResult(c, kind);
+      if (ctx === c && c.tab === kind) render(res);
+    }
+    tabsEl.addEventListener("click", function (e) {
+      var b = e.target.closest ? e.target.closest(".upi-tab") : null;
+      if (b && ctx && ctx.tab !== b.getAttribute("data-tab")) showTab(b.getAttribute("data-tab"));
+    });
 
     async function run() {
       var upi = input.value.replace(/\\/g, "/").replace(/\s+/g, "");
+      ctx = null; tabsEl.hidden = true;
       if (!upi) return show("err", "Enter a UPI to search.");
       go.disabled = true;
-      show("msg", "Finding the parcel and checking the master plan…");
+      show("msg", "Finding the parcel…");
       try {
         await loadTurf();
         var byPrefix = SITES.filter(function (s) { return s.upiPrefix && upi.indexOf(s.upiPrefix) === 0; });
@@ -380,68 +495,22 @@
             (failed.length ? "<br><br>Some areas could not be searched: " + esc(failed.join("; ")) : ""));
         }
         var site = hits[0].site, upiF = hits[0].upiF, p = hits[0].p;
-        var otherSites = hits.slice(1).map(function (h) { return h.site.name; });
-
-        var planLayer = await getLayer(site, "plan");
-        var zoneF = pickField(planLayer, site.zoneField, "the " + site.name + " zoning layer");
-        var useF = site.useField ? pickField(planLayer, site.useField, "the " + site.name + " zoning layer") : "";
-        var outFields = [zoneF, useF].filter(Boolean).join(",");
-
-        var parcel = asFeature(p.features[0].geometry);
+        var geom = p.features[0].geometry;
+        var parcel = asFeature(geom);
         var parcelArea = area(parcel);
         if (!parcelArea) return show("err", "This parcel has no usable geometry.");
         var mapUrl = await buildMapUrl(site, upi, parcel, upiF);
 
-        // Fast path: if one zone wholly contains the parcel, the answer is 100%
-        var whole = await query(planLayer.url, {
-          where: "1=1",
-          geometry: JSON.stringify(toEsriPolygon(p.features[0].geometry)),
-          geometryType: "esriGeometryPolygon",
-          inSR: "4326",
-          spatialRel: "esriSpatialRelContains",
-          outFields: outFields,
-          returnGeometry: "false"
-        });
-        if (whole.features.length === 1) {
-          var pr = whole.features[0].properties;
-          return render(site, upi, parcelArea, [{ zone: pr[zoneF] != null ? pr[zoneF] : "Unspecified", use: useF ? (pr[useF] != null ? pr[useF] : "") : "", a: parcelArea }], p.features.length, 0, mapUrl, otherSites);
-        }
-
-        show("msg", "Parcel spans several zones. Calculating percentages…");
-        var plan = await fetchAllPlan(p.features[0].geometry, planLayer.url, outFields);
-        if (!plan.length) return show("err", "The parcel was found, but no master plan zone covers it.");
-
-        var groups = new Map();
-        var bb = turf.bbox(parcel);
-        plan.forEach(function (f) {
-          var piece = safe(function () { return turf.intersect(turf.featureCollection([parcel, turf.bboxClip(asFeature(f.geometry), bb)])); });
-          if (!piece) return;
-          var zone = f.properties[zoneF] != null ? f.properties[zoneF] : "Unspecified";
-          var use = useF ? (f.properties[useF] != null ? f.properties[useF] : "") : "";
-          var key = zone + "|" + use;
-          var g = groups.get(key) || { zone: zone, use: use, geom: null };
-          g.geom = union(g.geom, piece);
-          groups.set(key, g);
-        });
-
-        var covered = null;
-        var rows = [];
-        Array.from(groups.values()).sort(function (a, b) { return area(b.geom) - area(a.geom); }).forEach(function (g) {
-          var own = covered ? safe(function () { return turf.difference(turf.featureCollection([g.geom, covered])); }) : g.geom;
-          var a = area(own);
-          covered = union(covered, g.geom);
-          if (a > 0) rows.push({ zone: g.zone, use: g.use, geom: g.geom, a: a });
-        });
-
-        var visible = rows.filter(function (r) { return r.a / parcelArea * 100 >= COMMON.minPercent; });
-        var hiddenCount = rows.length - visible.length;
-        var usedArea = Math.min(area(covered), parcelArea);
-        var unzoned = Math.max(parcelArea - usedArea, 0);
-        if (unzoned / parcelArea * 100 >= COMMON.minPercent) visible.push({ zone: "Not covered by any zone", use: "", a: unzoned, un: true });
-        render(site, upi, parcelArea, visible, p.features.length, hiddenCount, mapUrl, otherSites);
+        ctx = { site: site, upi: upi, geom: geom, parcel: parcel, parcelArea: parcelArea, parcelCount: p.features.length,
+                mapUrl: mapUrl, otherSites: hits.slice(1).map(function (h) { return h.site.name; }), jobs: {}, tab: "plan" };
+        tabsEl.hidden = false;
+        var c = ctx;
+        await showTab("plan");                       // zoning first
+        getResult(c, "physical");                    // calculate the physical plan in the background
       } catch (e) {
         console.error(e);
-        if (/not found in/.test(e.message)) { try { Object.keys(localStorage).filter(function (k) { return k.indexOf("rsdi_lu_v1_") === 0; }).forEach(function (k) { localStorage.removeItem(k); }); } catch (x) {} } show("err", "Could not complete the search: " + esc(e instanceof TypeError ? "Could not reach the mapping server (network problem, or the server does not allow this website)" : e.message) + ". Check that the layers are shared publicly.");
+        tabsEl.hidden = true; ctx = null;
+        show("err", errText(e));
       } finally {
         go.disabled = false;
       }
@@ -454,6 +523,7 @@
       loadTurf().catch(function () {});
       SITES.forEach(function (s) {
         getLayer(s, "parcels").catch(function () {}); getLayer(s, "plan").catch(function () {});
+        if (s.physical && (s.physical.url || s.physical.itemId)) getLayer(s, "physical").catch(function () {});
         (s.map.type === "exp" ? findMapWidgets(s) : getWabLayerId(s)).catch(function () {});
       });
     }
@@ -473,5 +543,5 @@
   window.RSDI_UPI = { mount: mount };
 })();
 
-RSDI_UPI.mount(document.getElementById("upiPanel"), { modal: true });
+RSDI_UPI.mount(document.getElementById("upiPanel"), { modal: !!(window.jQuery && document.getElementById("rsdiUpiModal")) });
 </script>
